@@ -21,6 +21,7 @@ namespace heatpump
         float targetTemperature = NAN;
         float currentRMS = 0.0F;
         bool powerOn = false;
+        bool powerStateValid = false;
         bool compressorRunning = false;
         bool errorActive = false;
         uint8_t errorCode = 0;
@@ -50,12 +51,23 @@ namespace heatpump
             if (!lock()) return;
             data_.currentRMS = currentRms;
             data_.currentClipping = clipping;
+            data_.lastCurrentUpdateMs = millis();
             data_.compressorRunning = compressorRunning;
-            data_.powerOn = data_.powerOn || compressorRunning;
             const size_t n = waveformCount > WF_SAMPLES ? WF_SAMPLES : waveformCount;
             for (size_t i = 0; i < n; ++i) data_.waveform[i] = waveform[i];
             for (size_t i = n; i < WF_SAMPLES; ++i) data_.waveform[i] = 0.0F;
-            data_.lastCurrentUpdateMs = millis();
+            unlock();
+        }
+
+        void markNetFrameReceived()
+        {
+            if (!lock()) 
+            {
+                return;
+            }
+
+            data_.lastNetFrameMs = millis();
+
             unlock();
         }
 
@@ -65,7 +77,7 @@ namespace heatpump
             if (!isnan(partial.waterTemperature)) data_.waterTemperature = partial.waterTemperature;
             if (!isnan(partial.targetTemperature)) data_.targetTemperature = partial.targetTemperature;
             if (partial.mode != HeatPumpMode::Unknown) data_.mode = partial.mode;
-            data_.powerOn = partial.powerOn;
+            if (partial.powerStateValid) {data_.powerOn = partial.powerOn; data_.powerStateValid = true;}
             data_.errorActive = partial.errorActive;
             data_.errorCode = partial.errorCode;
             data_.lastNetFrameMs = millis();

@@ -9,7 +9,7 @@ namespace current
     {
         analogReadResolution(12);
         analogSetPinAttenuation(adcPin_, ADC_11db); // suitable for roughly 0..3.1 V on many ESP32 variants
-        pinMode(adcPin_, INPUT);
+        (void)analogRead(adcPin_);
         logger::Logger::log(logger::Type::Current, "Current ADC initialized on GPIO%u", adcPin_);
     }
 
@@ -59,6 +59,12 @@ namespace current
         result.adcMeanVoltage = meanVoltage;
         result.voltageRmsAc = sqrtf(squareSum / static_cast<float>(config::current::kSampleCount));
         result.currentRms = result.voltageRmsAc * config::current::kAmpsPerVoltRms;
+
+        if (result.currentRms < config::current::kNoiseFloorA)
+        {
+            result.currentRms = 0.0F;
+        }
+
         result.clipping = clipping;
 
         // Downsample to waveform buffer, preserving voltage AC component in volts.

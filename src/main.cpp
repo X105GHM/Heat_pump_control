@@ -30,18 +30,18 @@ namespace
     void netBusRxTask(void*)
     {
         heatpump::NetRawFrame frame{};
-        for (;;) 
+
+        for (;;)
         {
-            if (gNetBus.sniffFrame(frame)) 
+            if (gNetBus.sniffFrame(frame))
             {
                 gRxLed.pulse(20);
 
-                if (xQueueSend(gRawFrameQueue, &frame, pdMS_TO_TICKS(10)) != pdTRUE) 
+                if (xQueueSend(gRawFrameQueue, &frame, pdMS_TO_TICKS(10)) != pdTRUE)
                 {
                     logger::Logger::log(logger::Type::NetBus, "raw frame queue full; frame dropped");
                 }
             }
-            taskYIELD();
         }
     }
 
@@ -49,13 +49,19 @@ namespace
     {
         heatpump::NetProtocol protocol;
         heatpump::NetRawFrame frame{};
-        heatpump::HeatPumpData decoded{};
 
-        for (;;) 
+        for (;;)
         {
-            if (xQueueReceive(gRawFrameQueue, &frame, portMAX_DELAY) == pdTRUE) 
+            if (xQueueReceive(
+                    gRawFrameQueue,
+                    &frame,
+                    portMAX_DELAY) == pdTRUE)
             {
-                if (protocol.decode(frame, decoded)) 
+                gState.markNetFrameReceived();
+
+                heatpump::HeatPumpData decoded{};
+
+                if (protocol.decode(frame, decoded))
                 {
                     gState.updateFromDecoded(decoded);
                 }

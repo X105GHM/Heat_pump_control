@@ -6,6 +6,7 @@
 #include "HeatPump/NetBus.hpp"
 #include "HeatPump/NetProtocol.hpp"
 #include "Led/StatusLed.hpp"
+#include "Led/ErrorLed.hpp"
 
 namespace heatpump
 {
@@ -34,13 +35,21 @@ namespace heatpump
         void sendCommandUnsafeUntilProtocolVerified(const HeatPumpCommand& command);
 
     private:
-        bool allowedByMinTimes(bool requestedPowerOn) const;
+        [[nodiscard]] bool allowedByMinTimes(bool requestedPowerOn) const;
+
+        led::Fault evaluateFault(const HeatPumpData& snapshot, uint8_t& detailCode);
+
+        static const char* faultToString(led::Fault fault);
 
         HeatPumpState& state_;
         NetBus& bus_;
+        led::ErrorLed errorLed_;
         QueueHandle_t commandQueue_;
         led::StatusLed statusLed_;
+        uint32_t startupMs_{0};
         uint32_t lastPowerChangeMs_{0};
+        uint32_t lowCurrentSinceMs_{0};
         bool lastPowerState_{false};
+        led::Fault lastFault_{led::Fault::None};
     };
 }
