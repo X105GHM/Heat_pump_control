@@ -178,18 +178,54 @@ namespace
             {
                 const char c = static_cast<char>(Serial.read());
 
-                if (c == '\r')
-                {
-                    continue;
-                }
-
-                if (c == '\n')
+                if (c == '\r' || c == '\n')
                 {
                     line.trim();
 
+                    if (line.length() == 0)
+                    {
+                        continue;
+                    }
+
                     if (line == "help")
                     {
-                        logger::Logger::log(logger::Type::General, "commands: nettx HEXFRAME");
+                        logger::Logger::log(
+                            logger::Type::General,
+                            "commands: RX, TX, reset, heap, nettx HEXFRAME");
+                    }
+                    else if (line == "reset")
+                    {
+                        logger::Logger::log(
+                            logger::Type::General,
+                            "reset requested");
+
+                        delay(1000);
+                        ESP.restart();
+                    }
+                    else if (line == "RX")
+                    {
+                        logger::Logger::log(
+                            logger::Type::General,
+                            "RX LED pulse");
+
+                        gRxLed.pulse(100);
+                    }
+                    else if (line == "TX")
+                    {
+                        logger::Logger::log(
+                            logger::Type::General,
+                            "TX LED pulse");
+
+                        gTxLed.pulse(100);
+                    }
+                    else if (line == "heap")
+                    {
+                        logger::Logger::log(
+                            logger::Type::General,
+                            "heap: free=%u minFree=%u maxAlloc=%u",
+                            static_cast<unsigned>(ESP.getFreeHeap()),
+                            static_cast<unsigned>(ESP.getMinFreeHeap()),
+                            static_cast<unsigned>(ESP.getMaxAllocHeap()));
                     }
                     else if (line.startsWith("nettx "))
                     {
@@ -198,22 +234,28 @@ namespace
                         uint8_t bytes[config::netbus::kMaxBytesPerFrame]{};
                         size_t byteCount = 0;
 
-                        if (!parseHexFrame(hex, bytes, byteCount, sizeof(bytes)))
+                        if (!parseHexFrame(
+                                hex,
+                                bytes,
+                                byteCount,
+                                sizeof(bytes)))
                         {
-                            logger::Logger::log(logger::Type::General,
-                                                "invalid hex frame");
+                            logger::Logger::log(
+                                logger::Type::General,
+                                "invalid hex frame");
                         }
                         else
                         {
-                            logger::Logger::log(logger::Type::General,
-                                                "manual NET TX requested, bytes=%u",
-                                                static_cast<unsigned>(byteCount));
+                            logger::Logger::log(
+                                logger::Type::General,
+                                "manual NET TX requested, bytes=%u",
+                                static_cast<unsigned>(byteCount));
 
                             gTxLed.pulse(50);
                             gNetBus.sendBytesSafe(bytes, byteCount);
                         }
                     }
-                    else if (line.length() > 0)
+                    else
                     {
                         logger::Logger::log(logger::Type::General, "unknown command: %s", line.c_str());
                     }
@@ -225,7 +267,6 @@ namespace
                     line += c;
                 }
             }
-
             core::delayMs(20);
         }
     }
@@ -246,8 +287,7 @@ void setup()
 
     if (gRawFrameQueue == nullptr || gCommandQueue == nullptr)
     {
-        logger::Logger::log(logger::Type::General,
-                            "queue allocation failed; restarting");
+        logger::Logger::log(logger::Type::General, "queue allocation failed; restarting");
         delay(1000);
         ESP.restart();
     }

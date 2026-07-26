@@ -9,8 +9,6 @@ namespace current
     {
         analogReadResolution(12);
 
-        // ESP32-S3 GPIO5 is ADC1-capable. Pin-specific attenuation is the
-        // right Arduino-ESP32 API for this use case.
         #ifdef ADC_ATTEN_DB_11
         analogSetPinAttenuation(adcPin_, ADC_ATTEN_DB_11);
         #else

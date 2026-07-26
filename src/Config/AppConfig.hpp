@@ -8,11 +8,9 @@ namespace config
 
     namespace netbus
     {
-        // PC1001/PC1002-like single-wire pulse bus.
-        // Header: LOW ~9 ms, HIGH ~5 ms
-        // Bit:    LOW ~1 ms, HIGH ~1 ms or ~3 ms
         static constexpr uint32_t kHeaderLowMinUs  = 7000;
         static constexpr uint32_t kHeaderLowMaxUs  = 12000;
+
         static constexpr uint32_t kHeaderHighMinUs = 4000;
         static constexpr uint32_t kHeaderHighMaxUs = 6500;
 
@@ -21,25 +19,40 @@ namespace config
 
         static constexpr uint32_t kShortHighMinUs = 600;
         static constexpr uint32_t kShortHighMaxUs = 1700;
-        static constexpr uint32_t kLongHighMinUs  = 2200;
-        static constexpr uint32_t kLongHighMaxUs  = 4200;
 
-        // Common PC1001 captures: HIGH ~1 ms = 1, HIGH ~3 ms = 0.
-        // If your captured raw frames are inverted, change only this flag.
+        static constexpr uint32_t kLongHighMinUs = 2200;
+        static constexpr uint32_t kLongHighMaxUs = 4200;
+
         static constexpr bool kLongHighMeansOne = false;
 
-        static constexpr uint32_t kFrameGapUs       = 12000;
-        static constexpr uint32_t kMaxPulseUs       = 30000;
-        static constexpr uint32_t kTxLowUs          = 1000;
+        static constexpr uint32_t kFrameGapUs = 12000;
+        static constexpr uint32_t kMaxPulseUs = 30000;
 
-        // Keep TX automatically consistent with RX bit mapping.
-        static constexpr uint32_t kTxHighZeroUs = kLongHighMeansOne ? 1000 : 3000;
-        static constexpr uint32_t kTxHighOneUs  = kLongHighMeansOne ? 3000 : 1000;
+        static constexpr uint32_t kTxLowUs = 1000;
 
-        static constexpr size_t   kShortFrameBytes = 9;
-        static constexpr size_t   kLongFrameBytes  = 12;
-        static constexpr size_t   kMaxBitsPerFrame  = 128;
-        static constexpr size_t   kMaxBytesPerFrame = 16;
+        static constexpr uint32_t kTxHighZeroUs =
+            kLongHighMeansOne ? 1000 : 3000;
+
+        static constexpr uint32_t kTxHighOneUs =
+            kLongHighMeansOne ? 3000 : 1000;
+
+        static constexpr size_t kShortFrameBytes = 9;
+        static constexpr size_t kLongFrameBytes  = 12;
+
+        static constexpr size_t kMaxBitsPerFrame  = 128;
+        static constexpr size_t kMaxBytesPerFrame = 16;
+
+        static constexpr uint32_t kBitHighZeroMinUs =
+            kLongHighMeansOne ? kShortHighMinUs : kLongHighMinUs;
+
+        static constexpr uint32_t kBitHighZeroMaxUs =
+            kLongHighMeansOne ? kShortHighMaxUs : kLongHighMaxUs;
+
+        static constexpr uint32_t kBitHighOneMinUs =
+            kLongHighMeansOne ? kLongHighMinUs : kShortHighMinUs;
+
+        static constexpr uint32_t kBitHighOneMaxUs =
+            kLongHighMeansOne ? kLongHighMaxUs : kShortHighMaxUs;
     }
 
     namespace current
@@ -60,11 +73,9 @@ namespace config
 
     namespace control
     {
-        static constexpr uint32_t kMinRunTimeMs = 180000;      // 3 min placeholder
-        static constexpr uint32_t kMinOffTimeMs = 180000;      // 3 min placeholder
+        static constexpr uint32_t kMinRunTimeMs = 180000; // 3 min placeholder
+        static constexpr uint32_t kMinOffTimeMs = 180000; // 3 min placeholder
         static constexpr float kCompressorCurrentThresholdA = 0.7F;
-
-        // Fault monitoring. Values are deliberately conservative during reverse engineering.
         static constexpr uint32_t kStartupGraceMs = 15000;
         static constexpr uint32_t kNetConnectionTimeoutMs = 10000;
         static constexpr uint32_t kCurrentMeasurementTimeoutMs = 3000;
@@ -77,13 +88,24 @@ namespace config
         #ifndef LED_COUNT
         #define LED_COUNT 1
         #endif
+
         #ifndef LED_BRIGHTNESS
-        #define LED_BRIGHTNESS 40
+        #define LED_BRIGHTNESS 255
         #endif
+
         static constexpr uint16_t kCount = LED_COUNT;
         static constexpr uint8_t kBrightness = LED_BRIGHTNESS;
+
         static constexpr uint32_t kPatternPauseMs = 1400;
         static constexpr uint32_t kPulseOnMs = 140;
         static constexpr uint32_t kPulseOffMs = 180;
+    }
+
+    namespace espnow
+    {
+        static constexpr uint8_t kWifiChannel = 1;
+        static constexpr uint32_t kStatusSendPeriodMs = 1000;
+        static constexpr bool kEnableStatusSend = false;
+        static constexpr bool kBroadcastStatusWhenNoPeer = true;
     }
 }

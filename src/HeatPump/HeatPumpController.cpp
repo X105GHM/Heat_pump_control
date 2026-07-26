@@ -10,11 +10,8 @@ namespace heatpump
           bus_(bus),
           commandQueue_(commandQueue),
           statusLed_(config::pins::kStatusLed),
-          errorLed_(config::pins::kErrorLed,
-                    config::errorLed::kCount,
-                    config::errorLed::kBrightness)
-    {
-    }
+          errorLed_(config::pins::kErrorLed, config::errorLed::kCount, config::errorLed::kBrightness)
+    {}
 
     void HeatPumpController::begin()
     {
@@ -65,8 +62,6 @@ namespace heatpump
             return led::Fault::CurrentSensorStale;
         }
 
-        // Only diagnose missing load current after power-on has remained asserted for a while.
-        // This avoids false alarms during startup delay, defrost and short control transitions.
         if (snap.powerStateValid && snap.powerOn && snap.currentRMS < config::control::kExpectedRunningCurrentMinA) 
         {
             if (lowCurrentSinceMs_ == 0) lowCurrentSinceMs_ = now;

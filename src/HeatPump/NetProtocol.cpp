@@ -6,7 +6,7 @@ namespace heatpump
     bool NetProtocol::checksumLooksValid(const NetRawFrame& frame) const
     {
         // Placeholder: PC1001/PC1002-like variants are not guaranteed to share
-        // checksum format. Keep this explicit until enough raw captures exist.
+        // checksum format. Keeping this explicit until enough raw captures exist.
         return frame.byteCount > 0 && !frame.overflow;
     }
 
