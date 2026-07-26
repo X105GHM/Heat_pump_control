@@ -10,12 +10,9 @@ namespace heatpump
           bus_(bus),
           commandQueue_(commandQueue),
           statusLed_(config::pins::kStatusLed),
-          errorLed_
-          (
-              config::pins::kErrorLed,
-              config::errorLed::kCount,
-              config::errorLed::kBrightness
-          )
+          errorLed_(config::pins::kErrorLed,
+                    config::errorLed::kCount,
+                    config::errorLed::kBrightness)
     {
     }
 
@@ -23,7 +20,6 @@ namespace heatpump
     {
         statusLed_.begin();
         errorLed_.begin();
-
         startupMs_ = millis();
         lastPowerChangeMs_ = startupMs_;
     }
@@ -39,77 +35,41 @@ namespace heatpump
     const char* HeatPumpController::faultToString(const led::Fault fault)
     {
         switch (fault) {
-            case led::Fault::NoNetConnection:
-                return "no NET-bus connection";
-
-            case led::Fault::NoCurrentWhileOn:
-                return "power on but no current";
-
-            case led::Fault::CurrentSensorStale:
-                return "current measurement stale";
-
-            case led::Fault::AdcClipping:
-                return "current ADC clipping";
-
-            case led::Fault::HeatPumpReportedError:
-                return "heat pump reported error";
-
+            case led::Fault::NoNetConnection: return "no NET-bus connection";
+            case led::Fault::NoCurrentWhileOn: return "power on but no current";
+            case led::Fault::CurrentSensorStale: return "current measurement stale";
+            case led::Fault::AdcClipping: return "current ADC clipping";
+            case led::Fault::HeatPumpReportedError: return "heat pump reported error";
             case led::Fault::None:
-            default:
-                return "none";
+            default: return "none";
         }
     }
 
-    led::Fault HeatPumpController::evaluateFault(const HeatPumpData& snapshot, uint8_t& detailCode)
+    led::Fault HeatPumpController::evaluateFault(const HeatPumpData& snap, uint8_t& detailCode)
     {
         detailCode = 0;
-
         const uint32_t now = millis();
-
         const bool startupGraceFinished = (now - startupMs_) >= config::control::kStartupGraceMs;
 
-        /*
-         * Priorität 1:
-         * Fehler, der direkt von der Wärmepumpe gemeldet wurde.
-         */
-        if (snapshot.errorActive) 
+        if (snap.errorActive) 
         {
-            detailCode = snapshot.errorCode;
-
+            detailCode = snap.errorCode;
             return led::Fault::HeatPumpReportedError;
         }
 
-        /*
-         * Priorität 2:
-         * ADC-Eingang erreicht nahezu 0 oder den Maximalwert.
-         */
-        if (snapshot.currentClipping) 
-        {
-            return led::Fault::AdcClipping;
-        }
+        if (snap.currentClipping) return led::Fault::AdcClipping;
 
-        /*
-         * Priorität 3:
-         * Strommess-Task liefert keine neuen Messwerte.
-         */
-        if (startupGraceFinished && (snapshot.lastCurrentUpdateMs == 0 ||
-            (now - snapshot.lastCurrentUpdateMs) > config::control:: kCurrentMeasurementTimeoutMs)) 
+        if (startupGraceFinished && (snap.lastCurrentUpdateMs == 0 ||
+             (now - snap.lastCurrentUpdateMs) > config::control::kCurrentMeasurementTimeoutMs)) 
         {
             return led::Fault::CurrentSensorStale;
         }
 
-        /*
-         * Priorität 4:
-         * Die Wärmepumpe meldet Power ON, es fließt aber
-         * über längere Zeit praktisch kein Strom.
-         */
-        if (snapshot.powerStateValid && snapshot.powerOn && snapshot.currentRMS < config::control::kExpectedRunningCurrentMinA) 
+        // Only diagnose missing load current after power-on has remained asserted for a while.
+        // This avoids false alarms during startup delay, defrost and short control transitions.
+        if (snap.powerStateValid && snap.powerOn && snap.currentRMS < config::control::kExpectedRunningCurrentMinA) 
         {
-            if (lowCurrentSinceMs_ == 0) 
-            {
-                lowCurrentSinceMs_ = now;
-            }
-
+            if (lowCurrentSinceMs_ == 0) lowCurrentSinceMs_ = now;
             if ((now - lowCurrentSinceMs_) >= config::control::kNoCurrentDetectionDelayMs) 
             {
                 return led::Fault::NoCurrentWhileOn;
@@ -120,13 +80,8 @@ namespace heatpump
             lowCurrentSinceMs_ = 0;
         }
 
-        /*
-         * Priorität 5:
-         * Keine Rohframes mehr auf dem NET-Bus.
-         */
-        if (startupGraceFinished && (snapshot.lastNetFrameMs == 0 ||
-            (now - snapshot.lastNetFrameMs) > config::control::kNetConnectionTimeoutMs)) 
-        {       
+        if (startupGraceFinished && (snap.lastNetFrameMs == 0 || (now - snap.lastNetFrameMs) > config::control::kNetConnectionTimeoutMs)) 
+        {
             return led::Fault::NoNetConnection;
         }
 
@@ -138,21 +93,18 @@ namespace heatpump
         const HeatPumpData snap = state_.snapshot();
         const bool status = (snap.powerStateValid && snap.powerOn) || snap.compressorRunning;
         statusLed_.set(status);
+
         uint8_t faultDetail = 0;
-
         const led::Fault fault = evaluateFault(snap, faultDetail);
-
         errorLed_.setFault(fault, faultDetail);
         errorLed_.update();
 
         if (fault != lastFault_) 
         {
-            logger::Logger::log(
-                logger::Type::Control,
-                "fault changed: %s detail=%u",
-                faultToString(fault),
-                static_cast<unsigned>(faultDetail));
-
+            logger::Logger::log(logger::Type::Control,
+                                "fault changed: %s detail=%u",
+                                faultToString(fault),
+                                static_cast<unsigned>(faultDetail));
             lastFault_ = fault;
         }
 
@@ -162,7 +114,7 @@ namespace heatpump
             logger::Logger::log(logger::Type::Control,
                                 "command received type=%u power=%u target=%.1f mode=%u",
                                 static_cast<unsigned>(command.type),
-                                command.powerOn ? 1U : 0U,
+                                command.powerOn ? 1 : 0,
                                 command.targetTemperature,
                                 static_cast<unsigned>(command.mode));
 
@@ -172,10 +124,11 @@ namespace heatpump
                 continue;
             }
 
+
             logger::Logger::log(logger::Type::Control, "safe default: command accepted by software, but NET TX is disabled until explicitly enabled");
         }
 
-        if (snap.powerStateValid && snap.powerOn != lastPowerState_)
+        if (snap.powerStateValid && snap.powerOn != lastPowerState_) 
         {
             lastPowerState_ = snap.powerOn;
             lastPowerChangeMs_ = millis();
@@ -185,27 +138,8 @@ namespace heatpump
 
     void HeatPumpController::sendCommandUnsafeUntilProtocolVerified(const HeatPumpCommand& command)
     {
-        bool bits[16]{};
-        size_t bitCount = 0;
+        (void)command;
 
-        switch (command.type) 
-        {
-            case HeatPumpCommandType::Power:
-                bits[0] = true;
-                bits[1] = command.powerOn;
-                bitCount = 2;
-                break;
-            case HeatPumpCommandType::RequestStatus:
-                bits[0] = false;
-                bits[1] = true;
-                bitCount = 2;
-                break;
-            default:
-                logger::Logger::log(logger::Type::Control, "TX placeholder for this command is not implemented");
-                return;
-        }
-
-        logger::Logger::log(logger::Type::Control, "WARNING: sending placeholder NET bits; use only after validating bus timing");
-        bus_.sendBitsSafe(bits, bitCount);
+        logger::Logger::log(logger::Type::Control, "command TX disabled; use manual nettx HEXFRAME for raw bus tests");
     }
 }

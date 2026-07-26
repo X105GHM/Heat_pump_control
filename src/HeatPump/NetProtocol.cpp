@@ -12,8 +12,7 @@ namespace heatpump
 
     const char* NetProtocol::modeToString(const HeatPumpMode mode)
     {
-        switch (mode) 
-        {
+        switch (mode) {
             case HeatPumpMode::Heat: return "Heat";
             case HeatPumpMode::Cool: return "Cool";
             case HeatPumpMode::Auto: return "Auto";
@@ -52,14 +51,6 @@ namespace heatpump
             return false;
         }
 
-        // Reverse-engineering area:
-        // Add known byte/bit mappings here after comparing raw frames with display state.
-        // Examples to identify:
-        // - power bit changes when display power button is pressed
-        // - target temperature byte changes by +/- 1 °C
-        // - water temperature follows real sensor/display value
-        // - error code appears when controller reports an alarm
-
-        return false; // No confirmed semantic decoding yet.
+        return false;
     }
 }

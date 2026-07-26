@@ -8,14 +8,25 @@ namespace current
     void CurrentSensor::begin()
     {
         analogReadResolution(12);
-        analogSetPinAttenuation(adcPin_, ADC_11db); // suitable for roughly 0..3.1 V on many ESP32 variants
+
+        // ESP32-S3 GPIO5 is ADC1-capable. Pin-specific attenuation is the
+        // right Arduino-ESP32 API for this use case.
+        #ifdef ADC_ATTEN_DB_11
+        analogSetPinAttenuation(adcPin_, ADC_ATTEN_DB_11);
+        #else
+        analogSetPinAttenuation(adcPin_, ADC_11db);
+        #endif
+
         (void)analogRead(adcPin_);
-        logger::Logger::log(logger::Type::Current, "Current ADC initialized on GPIO%u", adcPin_);
+
+        logger::Logger::log(logger::Type::Current, "Current ADC initialized on GPIO%u", static_cast<unsigned>(adcPin_));
     }
 
     float CurrentSensor::rawToVoltage(const uint16_t raw) const
     {
-        return (static_cast<float>(raw) / static_cast<float>(config::current::kAdcMaxRaw)) * config::current::kAdcReferenceVoltage;
+        return (static_cast<float>(raw) /
+                static_cast<float>(config::current::kAdcMaxRaw)) *
+               config::current::kAdcReferenceVoltage;
     }
 
     CurrentMeasurement CurrentSensor::measure()
@@ -33,11 +44,13 @@ namespace current
             {
                 delayMicroseconds(5);
             }
+
             nextSample += samplePeriodUs;
 
             const uint16_t value = static_cast<uint16_t>(analogRead(adcPin_));
             raw[i] = value;
             sumRaw += value;
+
             if (value <= config::current::kClipLowRaw || value >= config::current::kClipHighRaw) 
             {
                 clipping = true;
@@ -45,6 +58,7 @@ namespace current
         }
 
         const float meanRaw = static_cast<float>(sumRaw) / static_cast<float>(config::current::kSampleCount);
+
         const float meanVoltage = rawToVoltage(static_cast<uint16_t>(meanRaw));
 
         float squareSum = 0.0F;
@@ -60,7 +74,7 @@ namespace current
         result.voltageRmsAc = sqrtf(squareSum / static_cast<float>(config::current::kSampleCount));
         result.currentRms = result.voltageRmsAc * config::current::kAmpsPerVoltRms;
 
-        if (result.currentRms < config::current::kNoiseFloorA)
+        if (result.currentRms < config::current::kNoiseFloorA) 
         {
             result.currentRms = 0.0F;
         }

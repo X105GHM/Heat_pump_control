@@ -3,6 +3,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <cstring>
+#include <cmath>
 #include "Core/Types.hpp"
 
 namespace heatpump
@@ -20,9 +21,14 @@ namespace heatpump
         float waterTemperature = NAN;
         float targetTemperature = NAN;
         float currentRMS = 0.0F;
+
+        // powerOn is valid only after a decoded NET frame explicitly provided it.
         bool powerOn = false;
         bool powerStateValid = false;
+
+        // Derived from current measurement only.
         bool compressorRunning = false;
+
         bool errorActive = false;
         uint8_t errorCode = 0;
         HeatPumpMode mode = HeatPumpMode::Unknown;
@@ -49,38 +55,44 @@ namespace heatpump
                                const bool compressorRunning)
         {
             if (!lock()) return;
+
             data_.currentRMS = currentRms;
             data_.currentClipping = clipping;
-            data_.lastCurrentUpdateMs = millis();
             data_.compressorRunning = compressorRunning;
+            data_.lastCurrentUpdateMs = millis();
+
             const size_t n = waveformCount > WF_SAMPLES ? WF_SAMPLES : waveformCount;
             for (size_t i = 0; i < n; ++i) data_.waveform[i] = waveform[i];
             for (size_t i = n; i < WF_SAMPLES; ++i) data_.waveform[i] = 0.0F;
+
             unlock();
         }
 
         void markNetFrameReceived()
         {
-            if (!lock()) 
-            {
-                return;
-            }
-
+            if (!lock()) return;
             data_.lastNetFrameMs = millis();
-
             unlock();
         }
 
         void updateFromDecoded(const HeatPumpData& partial)
         {
             if (!lock()) return;
-            if (!isnan(partial.waterTemperature)) data_.waterTemperature = partial.waterTemperature;
-            if (!isnan(partial.targetTemperature)) data_.targetTemperature = partial.targetTemperature;
+
+            if (!std::isnan(partial.waterTemperature)) data_.waterTemperature = partial.waterTemperature;
+            if (!std::isnan(partial.targetTemperature)) data_.targetTemperature = partial.targetTemperature;
             if (partial.mode != HeatPumpMode::Unknown) data_.mode = partial.mode;
-            if (partial.powerStateValid) {data_.powerOn = partial.powerOn; data_.powerStateValid = true;}
+
+            if (partial.powerStateValid) 
+            {
+                data_.powerOn = partial.powerOn;
+                data_.powerStateValid = true;
+            }
+
             data_.errorActive = partial.errorActive;
             data_.errorCode = partial.errorCode;
             data_.lastNetFrameMs = millis();
+
             unlock();
         }
 

@@ -1,71 +1,53 @@
 #pragma once
-
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
-#include <cstddef>
-#include <cstdint>
+#include "Core/Types.hpp"
 #include "Config/AppConfig.hpp"
 
 namespace heatpump
 {
     enum class NetBit : uint8_t
     {
-        Zero,
-        One,
-        Unknown
+        Zero = 0,
+        One = 1,
+        Unknown = 255
     };
 
     struct NetRawFrame
     {
-        uint8_t bytes[config::netbus::kMaxBytesPerFrame]{};
+        uint32_t timestampMs = 0;
         uint16_t bitCount = 0;
+        uint8_t bytes[config::netbus::kMaxBytesPerFrame]{};
         uint8_t byteCount = 0;
         bool overflow = false;
-        uint32_t timestampMs = 0;
+        bool checksumOk = false;
     };
 
     class NetBus
     {
     public:
-        explicit NetBus(uint8_t pin) noexcept;
+        explicit NetBus(uint8_t pin) : pin_(pin) {}
 
         void begin();
-
-        bool sniffFrame(NetRawFrame& outFrame);
-
-        void sendBitsSafe(const bool* bits, size_t bitCount) const;
+        bool readLevel() const;
 
         void releaseBus() const;
         void pullLow() const;
 
+        void sendBitsSafe(const bool* bits, size_t bitCount) const;
+
+        void sendBytesSafe(const uint8_t* bytes, size_t byteCount) const;
+
+        bool sniffFrame(NetRawFrame& outFrame);
+
     private:
-        struct Pulse
-        {
-            bool level;
-            uint32_t durationUs;
-        };
-
-        static void IRAM_ATTR isrThunk(void* arg);
-        void IRAM_ATTR handleInterrupt();
-
-        [[nodiscard]] bool readLevelFast() const;
-        [[nodiscard]] bool popPulse(Pulse& pulse, TickType_t timeoutTicks);
-
         static bool inRange(uint32_t value, uint32_t min, uint32_t max) noexcept;
         static NetBit highDurationToBit(uint32_t highUs) noexcept;
-
         static void appendBit(NetRawFrame& frame, bool bit) noexcept;
+        uint32_t measureLevelDuration(bool level, uint32_t timeoutUs) const;
+        bool waitForLevel(bool level, uint32_t timeoutUs) const;
 
-        bool waitForHeader(NetRawFrame& frame);
-        bool readBitAfterHeader(NetRawFrame& frame);
-
-        uint8_t pin_{0};
-
-        QueueHandle_t pulseQueue_{nullptr};
-
-        volatile bool lastLevel_{true};
-        volatile uint32_t lastEdgeUs_{0};
-        volatile uint32_t droppedPulses_{0};
+        uint8_t pin_;
     };
 }

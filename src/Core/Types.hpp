@@ -12,7 +12,7 @@ namespace core
         T data[N]{};
         size_t size{0};
 
-        bool pushBack(const T& value) noexcept
+        bool pushBack(const T value) noexcept
         {
             if (size >= N) {
                 return false;

@@ -10,7 +10,8 @@ namespace communication
 
     void EspNowBridge::begin()
     {
-        logger::Logger::log(logger::Type::Comms, "ESP-NOW bridge stub ready. Add WiFi/esp_now init and RX callback here later.");
+        logger::Logger::log(logger::Type::Comms,
+                            "ESP-NOW bridge stub ready. Add WiFi/esp_now init and RX callback here later.");
     }
 
     bool EspNowBridge::injectCommand(const heatpump::HeatPumpCommand& command)

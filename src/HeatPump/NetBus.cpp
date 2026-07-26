@@ -1,32 +1,12 @@
 #include "HeatPump/NetBus.hpp"
-
 #include "Logger/Logger.hpp"
-
-#include <driver/gpio.h>
 
 namespace heatpump
 {
-    NetBus::NetBus(const uint8_t pin) noexcept : pin_(pin){}
-
     void NetBus::begin()
     {
         releaseBus();
-
-        pulseQueue_ = xQueueCreate(config::netbus::kPulseQueueLength, sizeof(Pulse));
-
-        if (pulseQueue_ == nullptr) 
-        {
-            logger::Logger::log(logger::Type::NetBus,"NET pulse queue allocation failed");
-
-            return;
-        }
-
-        lastLevel_ = readLevelFast();
-        lastEdgeUs_ = micros();
-
-        attachInterruptArg(digitalPinToInterrupt(pin_), &NetBus::isrThunk, this, CHANGE);
-
-        logger::Logger::log(logger::Type::NetBus, "NET bus initialized on GPIO%u with CHANGE interrupt", static_cast<unsigned>(pin_));
+        logger::Logger::log(logger::Type::NetBus, "NET bus initialized on GPIO%u as high-Z input", static_cast<unsigned>(pin_));
     }
 
     void NetBus::releaseBus() const
@@ -40,57 +20,10 @@ namespace heatpump
         pinMode(pin_, OUTPUT);
     }
 
-    bool NetBus::readLevelFast() const
+    bool NetBus::readLevel() const
     {
-        return gpio_get_level(static_cast<gpio_num_t>(pin_)) != 0;
-    }
-
-    void IRAM_ATTR NetBus::isrThunk(void* arg)
-    {
-        if (arg == nullptr) 
-        {
-            return;
-        }
-
-        static_cast<NetBus*>(arg)->handleInterrupt();
-    }
-
-    void IRAM_ATTR NetBus::handleInterrupt()
-    {
-        const uint32_t nowUs = micros();
-        const bool newLevel = readLevelFast();
-
-        const Pulse pulse{lastLevel_, nowUs - lastEdgeUs_};
-
-        lastLevel_ = newLevel;
-        lastEdgeUs_ = nowUs;
-
-        if (pulseQueue_ == nullptr) 
-        {
-            return;
-        }
-
-        BaseType_t higherPriorityTaskWoken = pdFALSE;
-
-        if (xQueueSendFromISR(pulseQueue_, &pulse,&higherPriorityTaskWoken) != pdTRUE) 
-        {   
-            ++droppedPulses_;
-        }
-
-        if (higherPriorityTaskWoken == pdTRUE) 
-        {
-            portYIELD_FROM_ISR();
-        }
-    }
-
-    bool NetBus::popPulse(Pulse& pulse, const TickType_t timeoutTicks)
-    {
-        if (pulseQueue_ == nullptr) 
-        {
-            return false;
-        }
-
-        return xQueueReceive(pulseQueue_, &pulse, timeoutTicks) == pdTRUE;
+        pinMode(pin_, INPUT);
+        return digitalRead(pin_) == HIGH;
     }
 
     bool NetBus::inRange(const uint32_t value, const uint32_t min, const uint32_t max) noexcept
@@ -126,15 +59,13 @@ namespace heatpump
         }
 
         const uint16_t byteIndex = frame.bitCount / 8;
-
-        const uint8_t bitIndex = 7U - static_cast<uint8_t>(frame.bitCount % 8);
+        const uint8_t bitIndex = 7U - static_cast<uint8_t>(frame.bitCount % 8U); // MSB first
 
         if (byteIndex < config::netbus::kMaxBytesPerFrame) 
         {
             if (bit) 
             {
-                frame.bytes[byteIndex] |=
-                    static_cast<uint8_t>(1U << bitIndex);
+                frame.bytes[byteIndex] |= static_cast<uint8_t>(1U << bitIndex);
             }
         } 
         else 
@@ -143,148 +74,152 @@ namespace heatpump
         }
 
         ++frame.bitCount;
-
         frame.byteCount = static_cast<uint8_t>((frame.bitCount + 7U) / 8U);
     }
 
-    bool NetBus::waitForHeader(NetRawFrame& frame)
+    bool NetBus::waitForLevel(const bool level, const uint32_t timeoutUs) const
     {
-        Pulse pulse{};
+        const uint32_t start = micros();
 
-        for (;;) 
+        while ((micros() - start) < timeoutUs) 
         {
-            if (!popPulse(pulse, pdMS_TO_TICKS(1000))) 
+            if (readLevel() == level) 
             {
-                return false;
+                return true;
             }
 
-            if (!pulse.level && inRange(pulse.durationUs, config::netbus::kHeaderLowMinUs, config::netbus::kHeaderLowMaxUs)) 
-            {
-                Pulse headerHigh{};
-       
-                if (!popPulse(headerHigh, pdMS_TO_TICKS(config::netbus::kFrameIdleTimeoutMs))) 
-                {
-                    return false;
-                }
-
-                if (headerHigh.level && inRange(headerHigh.durationUs, config::netbus::kHeaderHighMinUs, config::netbus::kHeaderHighMaxUs)) 
-                {
-                    frame.timestampMs = millis();
-                    return true;
-                }
-            }
+            delayMicroseconds(20);
         }
+
+        return false;
     }
 
-    bool NetBus::readBitAfterHeader(NetRawFrame& frame)
+    uint32_t NetBus::measureLevelDuration(const bool level, const uint32_t timeoutUs) const
     {
-        Pulse lowPulse{};
+        const uint32_t start = micros();
 
-        if (!popPulse(lowPulse, pdMS_TO_TICKS(config::netbus::kFrameIdleTimeoutMs))) 
+        while ((micros() - start) < timeoutUs && readLevel() == level) 
         {
-            return false;
+            delayMicroseconds(10);
         }
 
-        if (lowPulse.level && lowPulse.durationUs >= config::netbus::kFrameGapUs) 
-        {
-            return false;
-        }
-
-        if (lowPulse.level) 
-        {
-            return false;
-        }
-
-        if (!inRange(lowPulse.durationUs, config::netbus::kBitLowMinUs, config::netbus::kBitLowMaxUs)) 
-        {
-
-            return false;
-        }
-
-        Pulse highPulse{};
-
-        if (!popPulse(highPulse, pdMS_TO_TICKS(config::netbus::kFrameIdleTimeoutMs))) 
-        {
-            return false;
-        }
-
-        if (!highPulse.level) 
-        {
-            return false;
-        }
-
-        if (highPulse.durationUs >= config::netbus::kFrameGapUs) 
-        {
-            return false;
-        }
-
-        const NetBit bit = highDurationToBit(highPulse.durationUs);
-
-        if (bit == NetBit::Unknown) 
-        {
-            logger::Logger::log(logger::Type::NetBus, "unknown HIGH pulse: %lu us", static_cast<unsigned long>(highPulse.durationUs));
-
-            return false;
-        }
-
-        appendBit(frame, bit == NetBit::One);
-        return true;
+        return micros() - start;
     }
 
     bool NetBus::sniffFrame(NetRawFrame& outFrame)
-    {        outFrame = NetRawFrame{};
+    {
+        releaseBus();
+        outFrame = NetRawFrame{};
 
-        if (pulseQueue_ == nullptr) 
+        if (!waitForLevel(false, config::netbus::kMaxPulseUs)) 
         {
             return false;
         }
 
-        if (!waitForHeader(outFrame)) 
+        const uint32_t lowUs = measureLevelDuration(false, config::netbus::kMaxPulseUs);
+        if (!inRange(lowUs, config::netbus::kHeaderLowMinUs, config::netbus::kHeaderLowMaxUs)) 
         {
             return false;
         }
+
+        const uint32_t highUs = measureLevelDuration(true, config::netbus::kMaxPulseUs);
+        if (!inRange(highUs, config::netbus::kHeaderHighMinUs, config::netbus::kHeaderHighMaxUs)) 
+        {
+            return false;
+        }
+
+        outFrame.timestampMs = millis();
 
         while (outFrame.bitCount < config::netbus::kMaxBitsPerFrame) 
         {
-            if (!readBitAfterHeader(outFrame)) 
+            if (!waitForLevel(false, config::netbus::kFrameGapUs)) 
             {
                 break;
             }
+
+            const uint32_t bitLowUs = measureLevelDuration(false, config::netbus::kMaxPulseUs);
+
+            if (!inRange(bitLowUs, config::netbus::kBitLowMinUs, config::netbus::kBitLowMaxUs)) 
+            {
+                logger::Logger::log(logger::Type::NetBus, "bit LOW out of range: %lu us", static_cast<unsigned long>(bitLowUs));
+                break;
+            }
+
+            const uint32_t bitHighUs = measureLevelDuration(true, config::netbus::kMaxPulseUs);
+            if (bitHighUs >= config::netbus::kFrameGapUs) 
+            {
+                break;
+            }
+
+            const NetBit bit = highDurationToBit(bitHighUs);
+            if (bit == NetBit::Unknown) 
+            {
+                logger::Logger::log(logger::Type::NetBus, "unknown HIGH pulse: %lu us", static_cast<unsigned long>(bitHighUs));
+                break;
+            }
+
+            appendBit(outFrame, bit == NetBit::One);
         }
 
         return outFrame.bitCount >= 8;
     }
 
-    void NetBus::sendBitsSafe(
-        const bool* bits,
-        const size_t bitCount) const
+    void NetBus::sendBitsSafe(const bool* bits, const size_t bitCount) const
     {
-        if (bits == nullptr || bitCount == 0) {
+        if (bits == nullptr || bitCount == 0) 
+        {
             return;
         }
 
-        detachInterrupt(digitalPinToInterrupt(pin_));
         pullLow();
         delayMicroseconds(9000);
-
         releaseBus();
         delayMicroseconds(5000);
 
-        for (size_t i = 0; i < bitCount; ++i) {
+        for (size_t i = 0; i < bitCount; ++i) 
+        {
             pullLow();
             delayMicroseconds(config::netbus::kTxLowUs);
-
             releaseBus();
-
             delayMicroseconds(bits[i] ? config::netbus::kTxHighOneUs : config::netbus::kTxHighZeroUs);
         }
 
         releaseBus();
+    }
 
-        const_cast<NetBus*>(this)->lastLevel_ = const_cast<NetBus*>(this)->readLevelFast();
+    void NetBus::sendBytesSafe(const uint8_t* bytes, const size_t byteCount) const
+    {
+        if (bytes == nullptr || byteCount == 0) 
+        {
+            return;
+        }
 
-        const_cast<NetBus*>(this)->lastEdgeUs_ = micros();
+        if (byteCount != config::netbus::kShortFrameBytes && byteCount != config::netbus::kLongFrameBytes) 
+        {
+            logger::Logger::log(logger::Type::NetBus, "TX rejected: expected 9 or 12 bytes, got %u", static_cast<unsigned>(byteCount));
+            return;
+        }
 
-        attachInterruptArg(digitalPinToInterrupt(pin_), &NetBus::isrThunk, const_cast<NetBus*>(this), CHANGE);
+        bool bits[config::netbus::kMaxBitsPerFrame]{};
+        size_t bitCount = 0;
+
+        for (size_t byteIndex = 0; byteIndex < byteCount; ++byteIndex) 
+        {
+            const uint8_t value = bytes[byteIndex];
+
+            for (uint8_t bit = 0; bit < 8; ++bit) 
+            {
+                bits[bitCount++] = (value & (0x80U >> bit)) != 0;
+            }
+        }
+
+        logger::Logger::log(logger::Type::NetBus,
+                            "TX raw frame bytes=%u bits=%u zeroHigh=%luus oneHigh=%luus",
+                            static_cast<unsigned>(byteCount),
+                            static_cast<unsigned>(bitCount),
+                            static_cast<unsigned long>(config::netbus::kTxHighZeroUs),
+                            static_cast<unsigned long>(config::netbus::kTxHighOneUs));
+
+        sendBitsSafe(bits, bitCount);
     }
 }

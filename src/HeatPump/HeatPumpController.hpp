@@ -35,17 +35,15 @@ namespace heatpump
         void sendCommandUnsafeUntilProtocolVerified(const HeatPumpCommand& command);
 
     private:
-        [[nodiscard]] bool allowedByMinTimes(bool requestedPowerOn) const;
-
-        led::Fault evaluateFault(const HeatPumpData& snapshot, uint8_t& detailCode);
-
+        bool allowedByMinTimes(bool requestedPowerOn) const;
+        led::Fault evaluateFault(const HeatPumpData& snap, uint8_t& detailCode);
         static const char* faultToString(led::Fault fault);
 
         HeatPumpState& state_;
         NetBus& bus_;
-        led::ErrorLed errorLed_;
         QueueHandle_t commandQueue_;
         led::StatusLed statusLed_;
+        led::ErrorLed errorLed_;
         uint32_t startupMs_{0};
         uint32_t lastPowerChangeMs_{0};
         uint32_t lowCurrentSinceMs_{0};
