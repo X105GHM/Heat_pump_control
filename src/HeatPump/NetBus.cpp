@@ -22,7 +22,6 @@ namespace heatpump
 
     bool NetBus::readLevel() const
     {
-        pinMode(pin_, INPUT);
         return digitalRead(pin_) == HIGH;
     }
 
@@ -59,7 +58,7 @@ namespace heatpump
         }
 
         const uint16_t byteIndex = frame.bitCount / 8;
-        const uint8_t bitIndex = 7U - static_cast<uint8_t>(frame.bitCount % 8U); // MSB first
+        const uint8_t bitIndex = static_cast<uint8_t>(frame.bitCount % 8U); // LSB first
 
         if (byteIndex < config::netbus::kMaxBytesPerFrame) 
         {
@@ -171,6 +170,14 @@ namespace heatpump
             return;
         }
 
+        releaseBus();
+
+        if (!waitForIdleHigh(config::netbus::kFrameGapUs, 100000))
+        {
+            logger::Logger::log(logger::Type::NetBus, "TX aborted: bus not idle");
+            return;
+        }
+
         pullLow();
         delayMicroseconds(9000);
         releaseBus();
@@ -209,7 +216,7 @@ namespace heatpump
 
             for (uint8_t bit = 0; bit < 8; ++bit) 
             {
-                bits[bitCount++] = (value & (0x80U >> bit)) != 0;
+                bits[bitCount++] = (value & (1U << bit)) != 0; // LSB first
             }
         }
 
@@ -221,5 +228,35 @@ namespace heatpump
                             static_cast<unsigned long>(config::netbus::kTxHighOneUs));
 
         sendBitsSafe(bits, bitCount);
+    }
+
+    bool NetBus::waitForIdleHigh(const uint32_t idleUs, const uint32_t timeoutUs) const
+    {
+        const uint32_t start = micros();
+        uint32_t highStart = 0;
+
+        while ((micros() - start) < timeoutUs)
+        {
+            if (readLevel())
+            {
+                if (highStart == 0)
+                {
+                    highStart = micros();
+                }
+
+                if ((micros() - highStart) >= idleUs)
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                highStart = 0;
+            }
+
+            delayMicroseconds(50);
+        }
+
+        return false;
     }
 }

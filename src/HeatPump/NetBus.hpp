@@ -41,6 +41,8 @@ namespace heatpump
 
         bool sniffFrame(NetRawFrame& outFrame);
 
+        bool waitForIdleHigh(uint32_t idleUs, uint32_t timeoutUs) const;
+
     private:
         static bool inRange(uint32_t value, uint32_t min, uint32_t max) noexcept;
         static NetBit highDurationToBit(uint32_t highUs) noexcept;

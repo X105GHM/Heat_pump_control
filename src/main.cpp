@@ -5,7 +5,6 @@
 
 #include "Config/Pins.hpp"
 #include "Config/AppConfig.hpp"
-#include "Core/TaskUtils.hpp"
 #include "Logger/Logger.hpp"
 #include "Led/StatusLed.hpp"
 #include "HeatPump/HeatPumpState.hpp"
@@ -26,6 +25,8 @@ namespace
 
     led::StatusLed gRxLed(config::pins::kRxLed);
     led::StatusLed gTxLed(config::pins::kTxLed);
+
+    volatile bool gNetTxActive = false;
 
     int hexNibbleToInt(const char c)
     {
@@ -83,6 +84,12 @@ namespace
 
         for (;;)
         {
+            if (gNetTxActive)
+            {
+                vTaskDelay(pdMS_TO_TICKS(5));
+                continue;
+            }
+
             if (gNetBus.sniffFrame(frame))
             {
                 gRxLed.pulse(20);
@@ -92,6 +99,7 @@ namespace
                     logger::Logger::log(logger::Type::NetBus, "raw frame queue full; frame dropped");
                 }
             }
+
             vTaskDelay(pdMS_TO_TICKS(1));
         }
     }
@@ -130,14 +138,14 @@ namespace
                                      measurement.clipping,
                                      compressorRunning);
 
-            logger::Logger::log(logger::Type::Current,
+           /* logger::Logger::log(logger::Type::Current,
                                 "Irms=%.2fA VrmsAC=%.3fV mean=%.3fV clipping=%u",
                                 measurement.currentRms,
                                 measurement.voltageRmsAc,
                                 measurement.adcMeanVoltage,
-                                measurement.clipping ? 1 : 0);
+                                measurement.clipping ? 1 : 0); */
 
-            core::delayMs(config::current::kMeasurementPeriodMs);
+            vTaskDelay(pdMS_TO_TICKS(config::current::kMeasurementPeriodMs));
         }
     }
 
@@ -149,7 +157,7 @@ namespace
         for (;;)
         {
             controller.processControl();
-            core::delayMs(100);
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
 
@@ -161,7 +169,7 @@ namespace
         for (;;)
         {
             bridge.loopOnce();
-            core::delayMs(200);
+            vTaskDelay(pdMS_TO_TICKS(200));
         }
     }
 
@@ -234,25 +242,22 @@ namespace
                         uint8_t bytes[config::netbus::kMaxBytesPerFrame]{};
                         size_t byteCount = 0;
 
-                        if (!parseHexFrame(
-                                hex,
-                                bytes,
-                                byteCount,
-                                sizeof(bytes)))
+                        if (!parseHexFrame(hex, bytes, byteCount, sizeof(bytes)))
                         {
-                            logger::Logger::log(
-                                logger::Type::General,
-                                "invalid hex frame");
+                            logger::Logger::log(logger::Type::General, "invalid hex frame");
                         }
                         else
                         {
-                            logger::Logger::log(
-                                logger::Type::General,
-                                "manual NET TX requested, bytes=%u",
-                                static_cast<unsigned>(byteCount));
+                            logger::Logger::log(logger::Type::General, "manual NET TX requested, bytes=%u", static_cast<unsigned>(byteCount));
 
-                            gTxLed.pulse(50);
+                            gNetTxActive = true;
+                            vTaskDelay(pdMS_TO_TICKS(5));
+
                             gNetBus.sendBytesSafe(bytes, byteCount);
+                            gTxLed.pulse(50);
+
+                            vTaskDelay(pdMS_TO_TICKS(10));
+                            gNetTxActive = false;
                         }
                     }
                     else
@@ -267,7 +272,7 @@ namespace
                     line += c;
                 }
             }
-            core::delayMs(20);
+            vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
 }

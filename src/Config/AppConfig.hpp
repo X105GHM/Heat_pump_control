@@ -73,8 +73,8 @@ namespace config
 
     namespace control
     {
-        static constexpr uint32_t kMinRunTimeMs = 180000; // 3 min placeholder
-        static constexpr uint32_t kMinOffTimeMs = 180000; // 3 min placeholder
+        static constexpr uint32_t kMinRunTimeMs = 0;//180000; // 3 min placeholder
+        static constexpr uint32_t kMinOffTimeMs = 0;//180000; // 3 min placeholder
         static constexpr float kCompressorCurrentThresholdA = 0.7F;
         static constexpr uint32_t kStartupGraceMs = 15000;
         static constexpr uint32_t kNetConnectionTimeoutMs = 10000;
@@ -105,7 +105,7 @@ namespace config
     {
         static constexpr uint8_t kWifiChannel = 1;
         static constexpr uint32_t kStatusSendPeriodMs = 1000;
-        static constexpr bool kEnableStatusSend = false;
+        static constexpr bool kEnableStatusSend = true;
         static constexpr bool kBroadcastStatusWhenNoPeer = true;
     }
 }

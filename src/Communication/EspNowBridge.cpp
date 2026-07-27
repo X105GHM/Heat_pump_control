@@ -388,7 +388,7 @@ namespace communication
             case HeatPumpCommandType::SetMode:
                 outCommand.type = ControllerCommandType::SetMode;
 
-                switch (static_cast<HeatPumpMode>( packet.mode))
+                switch (static_cast<HeatPumpMode>(packet.mode))
                 {
                     case HeatPumpMode::Heat:
                         outCommand.mode = heatpump::HeatPumpMode::Heat;
