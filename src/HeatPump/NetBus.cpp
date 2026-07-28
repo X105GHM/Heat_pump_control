@@ -163,11 +163,11 @@ namespace heatpump
         return outFrame.bitCount >= 8;
     }
 
-    void NetBus::sendBitsSafe(const bool* bits, const size_t bitCount) const
+    bool NetBus::sendBitsSafe(const bool* bits, const size_t bitCount) const
     {
         if (bits == nullptr || bitCount == 0) 
         {
-            return;
+            return false;
         }
 
         releaseBus();
@@ -175,7 +175,7 @@ namespace heatpump
         if (!waitForIdleHigh(config::netbus::kFrameGapUs, 100000))
         {
             logger::Logger::log(logger::Type::NetBus, "TX aborted: bus not idle");
-            return;
+            return false;
         }
 
         pullLow();
@@ -192,19 +192,20 @@ namespace heatpump
         }
 
         releaseBus();
+        return true;
     }
 
-    void NetBus::sendBytesSafe(const uint8_t* bytes, const size_t byteCount) const
+    bool NetBus::sendBytesSafe(const uint8_t* bytes, const size_t byteCount) const
     {
         if (bytes == nullptr || byteCount == 0) 
         {
-            return;
+            return false;
         }
 
         if (byteCount != config::netbus::kShortFrameBytes && byteCount != config::netbus::kLongFrameBytes) 
         {
             logger::Logger::log(logger::Type::NetBus, "TX rejected: expected 9 or 12 bytes, got %u", static_cast<unsigned>(byteCount));
-            return;
+            return false;
         }
 
         bool bits[config::netbus::kMaxBitsPerFrame]{};
@@ -227,7 +228,7 @@ namespace heatpump
                             static_cast<unsigned long>(config::netbus::kTxHighZeroUs),
                             static_cast<unsigned long>(config::netbus::kTxHighOneUs));
 
-        sendBitsSafe(bits, bitCount);
+        return sendBitsSafe(bits, bitCount);
     }
 
     bool NetBus::waitForIdleHigh(const uint32_t idleUs, const uint32_t timeoutUs) const

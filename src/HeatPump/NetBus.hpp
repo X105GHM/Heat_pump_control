@@ -4,6 +4,8 @@
 #include <freertos/queue.h>
 #include "Core/Types.hpp"
 #include "Config/AppConfig.hpp"
+#include "HeatPump/HeatPumpCommand.hpp"
+#include "HeatPump/NetFrame.hpp"
 
 namespace heatpump
 {
@@ -14,14 +16,29 @@ namespace heatpump
         Unknown = 255
     };
 
-    struct NetRawFrame
+    enum class NetTxStatus : uint8_t
     {
-        uint32_t timestampMs = 0;
-        uint16_t bitCount = 0;
+        Sent,
+        Failed,
+        Expired
+    };
+
+    struct NetTxRequest
+    {
         uint8_t bytes[config::netbus::kMaxBytesPerFrame]{};
-        uint8_t byteCount = 0;
-        bool overflow = false;
-        bool checksumOk = false;
+        uint8_t byteCount = 0U;
+        uint32_t commandId = 0U;
+        HeatPumpCommandType commandType = HeatPumpCommandType::RequestStatus;
+        uint32_t localExpiresAtMs = 0U;
+        bool reportResult = false;
+    };
+
+    struct NetTxResult
+    {
+        uint32_t commandId = 0U;
+        HeatPumpCommandType commandType = HeatPumpCommandType::RequestStatus;
+        uint32_t completedAtMs = 0U;
+        NetTxStatus status = NetTxStatus::Failed;
     };
 
     class NetBus
@@ -35,9 +52,9 @@ namespace heatpump
         void releaseBus() const;
         void pullLow() const;
 
-        void sendBitsSafe(const bool* bits, size_t bitCount) const;
+        bool sendBitsSafe(const bool* bits, size_t bitCount) const;
 
-        void sendBytesSafe(const uint8_t* bytes, size_t byteCount) const;
+        bool sendBytesSafe(const uint8_t* bytes, size_t byteCount) const;
 
         bool sniffFrame(NetRawFrame& outFrame);
 

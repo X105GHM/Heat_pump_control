@@ -4,40 +4,10 @@
 #include <freertos/semphr.h>
 #include <cstring>
 #include <cmath>
-#include "Core/Types.hpp"
+#include "HeatPump/HeatPumpData.hpp"
 
 namespace heatpump
 {
-    enum class HeatPumpMode : uint8_t
-    {
-        Heat = 0,
-        Cool = 1,
-        Auto = 2,
-        Unknown = 255
-    };
-
-    struct HeatPumpData
-    {
-        float waterTemperature = NAN;
-        float targetTemperature = NAN;
-        float currentRMS = 0.0F;
-
-        // powerOn is valid only after a decoded NET frame explicitly provided it.
-        bool powerOn = false;
-        bool powerStateValid = false;
-
-        // Derived from current measurement only.
-        bool compressorRunning = false;
-
-        bool errorActive = false;
-        uint8_t errorCode = 0;
-        HeatPumpMode mode = HeatPumpMode::Unknown;
-        float waveform[WF_SAMPLES]{};
-        bool currentClipping = false;
-        uint32_t lastNetFrameMs = 0;
-        uint32_t lastCurrentUpdateMs = 0;
-    };
-
     class HeatPumpState
     {
     public:
@@ -68,31 +38,17 @@ namespace heatpump
             unlock();
         }
 
-        void markNetFrameReceived()
+        void markNetFrameReceived(const uint32_t receivedAtMs)
         {
             if (!lock()) return;
-            data_.lastNetFrameMs = millis();
+            data_.lastNetFrameMs = receivedAtMs;
             unlock();
         }
 
-        void updateFromDecoded(const HeatPumpData& partial)
+        void updateFromDecoded(const HeatPumpData& partial, const uint32_t receivedAtMs)
         {
             if (!lock()) return;
-
-            if (!std::isnan(partial.waterTemperature)) data_.waterTemperature = partial.waterTemperature;
-            if (!std::isnan(partial.targetTemperature)) data_.targetTemperature = partial.targetTemperature;
-            if (partial.mode != HeatPumpMode::Unknown) data_.mode = partial.mode;
-
-            if (partial.powerStateValid) 
-            {
-                data_.powerOn = partial.powerOn;
-                data_.powerStateValid = true;
-            }
-
-            data_.errorActive = partial.errorActive;
-            data_.errorCode = partial.errorCode;
-            data_.lastNetFrameMs = millis();
-
+            mergeDecodedData(data_, partial, receivedAtMs);
             unlock();
         }
 

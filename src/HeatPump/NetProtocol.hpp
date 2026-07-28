@@ -1,6 +1,6 @@
 #pragma once
-#include "HeatPump/NetBus.hpp"
-#include "HeatPump/HeatPumpState.hpp"
+#include "HeatPump/NetFrame.hpp"
+#include "HeatPump/HeatPumpData.hpp"
 
 namespace heatpump
 {

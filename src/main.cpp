@@ -3,12 +3,15 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 
+#include <cstring>
+
 #include "Config/Pins.hpp"
 #include "Config/AppConfig.hpp"
 #include "Logger/Logger.hpp"
 #include "Led/StatusLed.hpp"
 #include "HeatPump/HeatPumpState.hpp"
 #include "HeatPump/NetBus.hpp"
+#include "HeatPump/NetBusArbiter.hpp"
 #include "HeatPump/NetProtocol.hpp"
 #include "HeatPump/HeatPumpController.hpp"
 #include "CurrentSensor/CurrentSensor.hpp"
@@ -22,11 +25,12 @@ namespace
 
     QueueHandle_t gRawFrameQueue = nullptr;
     QueueHandle_t gCommandQueue = nullptr;
+    QueueHandle_t gCommandResultQueue = nullptr;
+    QueueHandle_t gNetTxQueue = nullptr;
+    QueueHandle_t gNetTxResultQueue = nullptr;
 
     led::StatusLed gRxLed(config::pins::kRxLed);
     led::StatusLed gTxLed(config::pins::kTxLed);
-
-    volatile bool gNetTxActive = false;
 
     int hexNibbleToInt(const char c)
     {
@@ -78,25 +82,90 @@ namespace
         return highNibble < 0 && outCount > 0;
     }
 
-    void netBusRxTask(void *)
+    void netBusOwnerTask(void *)
     {
+        gNetBus.begin();
+        heatpump::NetBusArbiter arbiter(config::control::kMinNetCommandIntervalMs);
         heatpump::NetRawFrame frame{};
+        heatpump::NetTxRequest pendingTx{};
+        bool hasPendingTx = false;
+        uint32_t rxLedOffAtMs = 0U;
+        uint32_t txLedOffAtMs = 0U;
 
         for (;;)
         {
-            if (gNetTxActive)
+            const uint32_t now = millis();
+            if (rxLedOffAtMs != 0U && static_cast<int32_t>(now - rxLedOffAtMs) >= 0)
             {
-                vTaskDelay(pdMS_TO_TICKS(5));
-                continue;
+                gRxLed.set(false);
+                rxLedOffAtMs = 0U;
+            }
+            if (txLedOffAtMs != 0U && static_cast<int32_t>(now - txLedOffAtMs) >= 0)
+            {
+                gTxLed.set(false);
+                txLedOffAtMs = 0U;
             }
 
-            if (gNetBus.sniffFrame(frame))
+            if (!hasPendingTx &&
+                xQueueReceive(gNetTxQueue, &pendingTx, 0U) == pdTRUE)
             {
-                gRxLed.pulse(20);
+                hasPendingTx = true;
+            }
 
-                if (xQueueSend(gRawFrameQueue, &frame, pdMS_TO_TICKS(10)) != pdTRUE)
+            if (hasPendingTx &&
+                pendingTx.localExpiresAtMs != UINT32_MAX &&
+                static_cast<int32_t>(pendingTx.localExpiresAtMs - now) <= 0)
+            {
+                if (pendingTx.reportResult)
                 {
-                    logger::Logger::log(logger::Type::NetBus, "raw frame queue full; frame dropped");
+                    heatpump::NetTxResult result{};
+                    result.commandId = pendingTx.commandId;
+                    result.commandType = pendingTx.commandType;
+                    result.completedAtMs = now;
+                    result.status = heatpump::NetTxStatus::Expired;
+                    xQueueSend(gNetTxResultQueue, &result, 0U);
+                }
+                hasPendingTx = false;
+            }
+
+            if (hasPendingTx && arbiter.beginTransmit(now))
+            {
+                const bool sent = gNetBus.sendBytesSafe(pendingTx.bytes,
+                                                        pendingTx.byteCount);
+                const uint32_t completedAtMs = millis();
+                arbiter.endTransmit(completedAtMs);
+                gTxLed.set(true);
+                txLedOffAtMs = completedAtMs + 50U;
+
+                if (pendingTx.reportResult)
+                {
+                    heatpump::NetTxResult result{};
+                    result.commandId = pendingTx.commandId;
+                    result.commandType = pendingTx.commandType;
+                    result.completedAtMs = completedAtMs;
+                    result.status = sent
+                        ? heatpump::NetTxStatus::Sent
+                        : heatpump::NetTxStatus::Failed;
+                    xQueueSend(gNetTxResultQueue, &result, 0U);
+                }
+                hasPendingTx = false;
+            }
+
+            if (arbiter.beginReceive())
+            {
+                const bool received = gNetBus.sniffFrame(frame);
+                arbiter.endReceive();
+
+                if (received)
+                {
+                    gRxLed.set(true);
+                    rxLedOffAtMs = millis() + 20U;
+
+                    if (xQueueSend(gRawFrameQueue, &frame, 0U) != pdTRUE)
+                    {
+                        logger::Logger::log(logger::Type::NetBus,
+                                            "raw frame queue full; frame dropped");
+                    }
                 }
             }
 
@@ -113,13 +182,14 @@ namespace
         {
             if (xQueueReceive(gRawFrameQueue, &frame, portMAX_DELAY) == pdTRUE)
             {
-                gState.markNetFrameReceived();
-
-                heatpump::HeatPumpData decoded{};
-
-                if (protocol.decode(frame, decoded))
+                if (protocol.checksumLooksValid(frame))
                 {
-                    gState.updateFromDecoded(decoded);
+                    gState.markNetFrameReceived(frame.timestampMs);
+                    heatpump::HeatPumpData decoded{};
+                    if (protocol.decode(frame, decoded))
+                    {
+                        gState.updateFromDecoded(decoded, frame.timestampMs);
+                    }
                 }
             }
         }
@@ -151,7 +221,11 @@ namespace
 
     void heatPumpControlTask(void *)
     {
-        heatpump::HeatPumpController controller(gState, gNetBus, gCommandQueue);
+        heatpump::HeatPumpController controller(gState,
+                                                gCommandQueue,
+                                                gCommandResultQueue,
+                                                gNetTxQueue,
+                                                gNetTxResultQueue);
         controller.begin();
 
         for (;;)
@@ -163,7 +237,7 @@ namespace
 
     void communicationTask(void *)
     {
-        communication::EspNowBridge bridge(gState, gCommandQueue);
+        communication::EspNowBridge bridge(gState, gCommandQueue, gCommandResultQueue);
         bridge.begin();
 
         for (;;)
@@ -250,14 +324,17 @@ namespace
                         {
                             logger::Logger::log(logger::Type::General, "manual NET TX requested, bytes=%u", static_cast<unsigned>(byteCount));
 
-                            gNetTxActive = true;
-                            vTaskDelay(pdMS_TO_TICKS(5));
+                            heatpump::NetTxRequest request{};
+                            std::memcpy(request.bytes, bytes, byteCount);
+                            request.byteCount = static_cast<uint8_t>(byteCount);
+                            request.localExpiresAtMs = millis() + 5000U;
+                            request.reportResult = false;
 
-                            gNetBus.sendBytesSafe(bytes, byteCount);
-                            gTxLed.pulse(50);
-
-                            vTaskDelay(pdMS_TO_TICKS(10));
-                            gNetTxActive = false;
+                            if (xQueueSend(gNetTxQueue, &request, 0U) != pdTRUE)
+                            {
+                                logger::Logger::log(logger::Type::General,
+                                                    "manual NET TX queue full");
+                            }
                         }
                     }
                     else
@@ -282,22 +359,28 @@ void setup()
     logger::Logger::begin(config::kSerialBaud);
 
     gState.begin();
-    gNetBus.begin();
     gCurrentSensor.begin();
     gRxLed.begin();
     gTxLed.begin();
 
     gRawFrameQueue = xQueueCreate(8, sizeof(heatpump::NetRawFrame));
     gCommandQueue = xQueueCreate(8, sizeof(heatpump::HeatPumpCommand));
+    gCommandResultQueue = xQueueCreate(8, sizeof(heatpump::HeatPumpCommandResult));
+    gNetTxQueue = xQueueCreate(8, sizeof(heatpump::NetTxRequest));
+    gNetTxResultQueue = xQueueCreate(8, sizeof(heatpump::NetTxResult));
 
-    if (gRawFrameQueue == nullptr || gCommandQueue == nullptr)
+    if (gRawFrameQueue == nullptr ||
+        gCommandQueue == nullptr ||
+        gCommandResultQueue == nullptr ||
+        gNetTxQueue == nullptr ||
+        gNetTxResultQueue == nullptr)
     {
         logger::Logger::log(logger::Type::General, "queue allocation failed; restarting");
         delay(1000);
         ESP.restart();
     }
 
-    xTaskCreatePinnedToCore(netBusRxTask, "NetBusRx", 4096, nullptr, 2, nullptr, 0);
+    xTaskCreatePinnedToCore(netBusOwnerTask, "NetBusOwner", 4096, nullptr, 2, nullptr, 0);
     xTaskCreatePinnedToCore(netProtocolTask, "NetProtocol", 4096, nullptr, 1, nullptr, 0);
     xTaskCreatePinnedToCore(currentSensorTask, "Current", 4096, nullptr, 1, nullptr, 1);
     xTaskCreatePinnedToCore(heatPumpControlTask, "HPControl", 4096, nullptr, 1, nullptr, 1);

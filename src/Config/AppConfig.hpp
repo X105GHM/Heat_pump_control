@@ -73,14 +73,21 @@ namespace config
 
     namespace control
     {
-        static constexpr uint32_t kMinRunTimeMs = 0;//180000; // 3 min placeholder
-        static constexpr uint32_t kMinOffTimeMs = 0;//180000; // 3 min placeholder
+        static constexpr uint32_t kMinRunTimeMs = 180000;
+        static constexpr uint32_t kMinOffTimeMs = 180000;
+        static constexpr uint32_t kMinNetCommandIntervalMs = 1000;
+        static constexpr uint32_t kCommandConfirmationTimeoutMs = 5000;
         static constexpr float kCompressorCurrentThresholdA = 0.7F;
         static constexpr uint32_t kStartupGraceMs = 15000;
         static constexpr uint32_t kNetConnectionTimeoutMs = 10000;
+        static constexpr uint32_t kBridgeConnectionTimeoutMs = 10000;
         static constexpr uint32_t kCurrentMeasurementTimeoutMs = 3000;
         static constexpr uint32_t kNoCurrentDetectionDelayMs = 20000;
         static constexpr float kExpectedRunningCurrentMinA = 0.5F;
+
+        static_assert(kMinRunTimeMs > 0U);
+        static_assert(kMinOffTimeMs > 0U);
+        static_assert(kMinNetCommandIntervalMs > 0U);
     }
 
     namespace errorLed
@@ -107,5 +114,6 @@ namespace config
         static constexpr uint32_t kStatusSendPeriodMs = 1000;
         static constexpr bool kEnableStatusSend = true;
         static constexpr bool kBroadcastStatusWhenNoPeer = true;
+        static constexpr uint32_t kBridgeHeartbeatPeriodMs = 2000;
     }
 }

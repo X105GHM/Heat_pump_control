@@ -1,175 +1,29 @@
 #include "HeatPump/HeatPumpController.hpp"
+
 #include "Config/Pins.hpp"
 #include "Config/AppConfig.hpp"
 #include "Logger/Logger.hpp"
 
-#include <cmath>
-#include <cstdio>
-
-namespace
-{
-    static constexpr size_t kConfigFrameSize = 12;
-
-    uint8_t checksum12(const uint8_t* frame)
-    {
-        uint16_t sum = 0;
-
-        for (uint8_t i = 0; i < 11; ++i)
-        {
-            sum = static_cast<uint16_t>(sum + frame[i]);
-        }
-
-        return static_cast<uint8_t>(sum & 0xFFU);
-    }
-
-    void updateChecksum12(uint8_t* frame)
-    {
-        frame[11] = checksum12(frame);
-    }
-
-    uint8_t encodeTemperature(const float temperature)
-    {
-        float value = temperature;
-
-        if (!std::isfinite(value))
-        {
-            value = 28.0F;
-        }
-
-        if (value < 5.0F)
-        {
-            value = 5.0F;
-        }
-
-        if (value > 35.0F)
-        {
-            value = 35.0F;
-        }
-
-        const bool useOffset = value >= 2.0F;
-        const float encodedValue = useOffset ? value - 2.0F : value;
-
-        int halfSteps = static_cast<int>(std::round(encodedValue * 2.0F));
-
-        if (halfSteps < 0)
-        {
-            halfSteps = 0;
-        }
-
-        if (halfSteps > 63)
-        {
-            halfSteps = 63;
-        }
-
-        const uint8_t integerPart = static_cast<uint8_t>(halfSteps / 2);
-        const uint8_t halfBit = static_cast<uint8_t>(halfSteps % 2);
-
-        uint8_t raw = static_cast<uint8_t>((integerPart << 1U) | halfBit);
-
-        if (useOffset)
-        {
-            raw |= 0x40U;
-        }
-
-        return raw;
-    }
-
-    heatpump::HeatPumpMode modeFromFrameByte(const uint8_t modeByte)
-    {
-        const bool heat = (modeByte & 0x10U) != 0;
-        const bool automatic = (modeByte & 0x20U) != 0;
-
-        if (automatic)
-        {
-            return heatpump::HeatPumpMode::Auto;
-        }
-
-        if (heat)
-        {
-            return heatpump::HeatPumpMode::Heat;
-        }
-
-        return heatpump::HeatPumpMode::Cool;
-    }
-
-    void setPower(uint8_t* frame, const bool powerOn)
-    {
-        if (powerOn)
-        {
-            frame[2] |= 0x01U;
-        }
-        else
-        {
-            frame[2] &= static_cast<uint8_t>(~0x01U);
-        }
-    }
-
-    void setMode(uint8_t* frame, const heatpump::HeatPumpMode mode)
-    {
-        frame[2] &= static_cast<uint8_t>(~0x30U);
-
-        switch (mode)
-        {
-            case heatpump::HeatPumpMode::Heat:
-                frame[2] |= 0x10U;
-                break;
-
-            case heatpump::HeatPumpMode::Auto:
-                frame[2] |= 0x20U;
-                break;
-
-            case heatpump::HeatPumpMode::Cool:
-                break;
-
-            default:
-                break;
-        }
-    }
-
-    void setTargetTemperatureForCurrentMode(uint8_t* frame, const float temperature)
-    {
-        const uint8_t encoded = encodeTemperature(temperature);
-        const heatpump::HeatPumpMode mode = modeFromFrameByte(frame[2]);
-
-        switch (mode)
-        {
-            case heatpump::HeatPumpMode::Cool:
-                frame[3] = encoded;
-                break;
-
-            case heatpump::HeatPumpMode::Heat:
-                frame[4] = encoded;
-                break;
-
-            case heatpump::HeatPumpMode::Auto:
-                frame[5] = encoded;
-                break;
-
-            default:
-                frame[5] = encoded;
-                break;
-        }
-    }
-
-    void frameToHex(const uint8_t* frame, char* out, const size_t outSize)
-    {
-        size_t pos = 0;
-
-        for (size_t i = 0; i < kConfigFrameSize && pos + 3 < outSize; ++i)
-        {
-            pos += std::snprintf(out + pos, outSize - pos, "%02X ", frame[i]);
-        }
-    }
-}
+#include <cstring>
 
 namespace heatpump
 {
-    HeatPumpController::HeatPumpController(HeatPumpState& state, NetBus& bus, QueueHandle_t commandQueue)
+    HeatPumpController::HeatPumpController(HeatPumpState& state,
+                                           QueueHandle_t commandQueue,
+                                           QueueHandle_t resultQueue,
+                                           QueueHandle_t netTxQueue,
+                                           QueueHandle_t netTxResultQueue)
         : state_(state),
-          bus_(bus),
           commandQueue_(commandQueue),
+          resultQueue_(resultQueue),
+          netTxQueue_(netTxQueue),
+          netTxResultQueue_(netTxResultQueue),
           statusLed_(config::pins::kStatusLed),
-          errorLed_(config::pins::kErrorLed, config::errorLed::kCount, config::errorLed::kBrightness)
+          errorLed_(config::pins::kErrorLed,
+                    config::errorLed::kCount,
+                    config::errorLed::kBrightness),
+          powerGuard_(config::control::kMinRunTimeMs,
+                      config::control::kMinOffTimeMs)
     {}
 
     void HeatPumpController::begin()
@@ -177,98 +31,64 @@ namespace heatpump
         statusLed_.begin();
         errorLed_.begin();
         startupMs_ = millis();
-        lastPowerChangeMs_ = startupMs_;
-    }
-
-    bool HeatPumpController::allowedByMinTimes(const bool requestedPowerOn) const
-    {
-        const uint32_t elapsed = millis() - lastPowerChangeMs_;
-
-        if (requestedPowerOn && elapsed < config::control::kMinOffTimeMs)
-        {
-            return false;
-        }
-
-        if (!requestedPowerOn && elapsed < config::control::kMinRunTimeMs)
-        {
-            return false;
-        }
-
-        return true;
     }
 
     const char* HeatPumpController::faultToString(const led::Fault fault)
     {
         switch (fault)
         {
-            case led::Fault::NoNetConnection:
-                return "no NET-bus connection";
-
-            case led::Fault::NoCurrentWhileOn:
-                return "power on but no current";
-
-            case led::Fault::CurrentSensorStale:
-                return "current measurement stale";
-
-            case led::Fault::AdcClipping:
-                return "current ADC clipping";
-
-            case led::Fault::HeatPumpReportedError:
-                return "heat pump reported error";
-
+            case led::Fault::NoNetConnection: return "no NET-bus connection";
+            case led::Fault::NoCurrentWhileOn: return "power on but no current";
+            case led::Fault::CurrentSensorStale: return "current measurement stale";
+            case led::Fault::AdcClipping: return "current ADC clipping";
+            case led::Fault::HeatPumpReportedError: return "heat pump reported error";
             case led::Fault::None:
-            default:
-                return "none";
+            default: return "none";
         }
     }
 
-    led::Fault HeatPumpController::evaluateFault(const HeatPumpData& snap, uint8_t& detailCode)
+    led::Fault HeatPumpController::evaluateFault(const HeatPumpData& snapshot,
+                                                 uint8_t& detailCode)
     {
-        detailCode = 0;
-
+        detailCode = 0U;
         const uint32_t now = millis();
-        const bool startupGraceFinished = (now - startupMs_) >= config::control::kStartupGraceMs;
+        const bool startupGraceFinished =
+            static_cast<uint32_t>(now - startupMs_) >= config::control::kStartupGraceMs;
 
-        if (snap.errorActive)
+        if (snapshot.errorActive)
         {
-            detailCode = snap.errorCode;
+            detailCode = snapshot.errorCode;
             return led::Fault::HeatPumpReportedError;
         }
-
-        if (snap.currentClipping)
-        {
-            return led::Fault::AdcClipping;
-        }
+        if (snapshot.currentClipping) return led::Fault::AdcClipping;
 
         if (startupGraceFinished &&
-            (snap.lastCurrentUpdateMs == 0 ||
-             (now - snap.lastCurrentUpdateMs) > config::control::kCurrentMeasurementTimeoutMs))
+            (snapshot.lastCurrentUpdateMs == 0U ||
+             static_cast<uint32_t>(now - snapshot.lastCurrentUpdateMs) >
+                 config::control::kCurrentMeasurementTimeoutMs))
         {
             return led::Fault::CurrentSensorStale;
         }
 
-        if (snap.powerStateValid &&
-            snap.powerOn &&
-            snap.currentRMS < config::control::kExpectedRunningCurrentMinA)
+        if (snapshot.powerStateValid && snapshot.powerOn &&
+            snapshot.currentRMS < config::control::kExpectedRunningCurrentMinA)
         {
-            if (lowCurrentSinceMs_ == 0)
-            {
-                lowCurrentSinceMs_ = now;
-            }
-
-            if ((now - lowCurrentSinceMs_) >= config::control::kNoCurrentDetectionDelayMs)
+            if (lowCurrentSinceMs_ == 0U) lowCurrentSinceMs_ = now;
+            if (static_cast<uint32_t>(now - lowCurrentSinceMs_) >=
+                config::control::kNoCurrentDetectionDelayMs)
             {
                 return led::Fault::NoCurrentWhileOn;
             }
         }
         else
         {
-            lowCurrentSinceMs_ = 0;
+            lowCurrentSinceMs_ = 0U;
         }
 
         if (startupGraceFinished &&
-            (snap.lastNetFrameMs == 0 ||
-             (now - snap.lastNetFrameMs) > config::control::kNetConnectionTimeoutMs))
+            (snapshot.lastNetFrameMs == 0U ||
+             static_cast<uint32_t>(now - snapshot.lastNetFrameMs) >
+                 config::control::kNetConnectionTimeoutMs))
         {
             return led::Fault::NoNetConnection;
         }
@@ -276,16 +96,308 @@ namespace heatpump
         return led::Fault::None;
     }
 
+    bool HeatPumpController::netStateIsCurrent(const HeatPumpData& snapshot,
+                                               const uint32_t now) const
+    {
+        return snapshot.configurationValid &&
+               snapshot.lastConfigFrameMs != 0U &&
+               snapshot.lastNetFrameMs != 0U &&
+               static_cast<uint32_t>(now - snapshot.lastConfigFrameMs) <=
+                   config::control::kNetConnectionTimeoutMs &&
+               static_cast<uint32_t>(now - snapshot.lastNetFrameMs) <=
+                   config::control::kNetConnectionTimeoutMs;
+    }
+
+    void HeatPumpController::sendResult(const HeatPumpCommand& command,
+                                        const poolwire::CommandAckStage stage,
+                                        const poolwire::AckResult result,
+                                        const uint16_t errorCode)
+    {
+        if (command.commandId == 0U || resultQueue_ == nullptr) return;
+
+        HeatPumpCommandResult commandResult{};
+        commandResult.commandId = command.commandId;
+        commandResult.type = command.type;
+        commandResult.stage = stage;
+        commandResult.result = result;
+        commandResult.errorCode = errorCode;
+
+        if (xQueueSend(resultQueue_, &commandResult, 0U) != pdTRUE)
+        {
+            logger::Logger::log(logger::Type::Control,
+                                "command result queue full id=%lu",
+                                static_cast<unsigned long>(command.commandId));
+        }
+    }
+
+    void HeatPumpController::completePending(const poolwire::CommandAckStage stage,
+                                             const poolwire::AckResult result,
+                                             const uint16_t errorCode)
+    {
+        if (!pending_.active) return;
+        sendResult(pending_.command, stage, result, errorCode);
+
+        if (pending_.safetyStop && stage == poolwire::CommandAckStage::AppliedLocally)
+        {
+            safetyStopRequested_ = false;
+        }
+        pending_ = PendingCommand{};
+    }
+
+    bool HeatPumpController::submitConfigCommand(const HeatPumpCommand& command,
+                                                 const HeatPumpData& snapshot,
+                                                 const bool safetyStop)
+    {
+        const uint32_t now = millis();
+        if (!netStateIsCurrent(snapshot, now))
+        {
+            if (!safetyStop)
+            {
+                sendResult(command,
+                           poolwire::CommandAckStage::Failed,
+                           poolwire::AckResult::ApplicationFailed,
+                           3U);
+            }
+            return false;
+        }
+
+        if (NetConfiguration::matches(snapshot.configFrame, command))
+        {
+            if (!safetyStop)
+            {
+                sendResult(command,
+                           poolwire::CommandAckStage::AppliedLocally,
+                           poolwire::AckResult::Accepted,
+                           0U);
+            }
+            else
+            {
+                safetyStopRequested_ = false;
+            }
+            return true;
+        }
+
+        if ((command.type == HeatPumpCommandType::Power ||
+             command.type == HeatPumpCommandType::SafetyStop) &&
+            !powerGuard_.allows(command.type == HeatPumpCommandType::Power && command.powerOn,
+                                now))
+        {
+            if (!safetyStop)
+            {
+                sendResult(command,
+                           poolwire::CommandAckStage::Rejected,
+                           poolwire::AckResult::Rejected,
+                           2U);
+            }
+            return false;
+        }
+
+        NetTxRequest request{};
+        if (!NetConfiguration::apply(snapshot.configFrame, command, request.bytes))
+        {
+            if (!safetyStop)
+            {
+                sendResult(command,
+                           poolwire::CommandAckStage::Rejected,
+                           poolwire::AckResult::InvalidPayload,
+                           4U);
+            }
+            return false;
+        }
+
+        request.byteCount = static_cast<uint8_t>(NetConfiguration::kFrameSize);
+        request.commandId = command.commandId;
+        request.commandType = command.type;
+        request.localExpiresAtMs = safetyStop ? UINT32_MAX : command.localExpiresAtMs;
+        request.reportResult = true;
+
+        if (netTxQueue_ == nullptr || xQueueSend(netTxQueue_, &request, 0U) != pdTRUE)
+        {
+            if (!safetyStop)
+            {
+                sendResult(command,
+                           poolwire::CommandAckStage::Rejected,
+                           poolwire::AckResult::QueueFull,
+                           5U);
+            }
+            return false;
+        }
+
+        pending_ = PendingCommand{};
+        pending_.active = true;
+        pending_.safetyStop = safetyStop;
+        pending_.command = command;
+        pending_.phase = PendingPhase::AwaitingTransmit;
+        std::memcpy(pending_.expectedFrame,
+                    request.bytes,
+                    sizeof(pending_.expectedFrame));
+        return true;
+    }
+
+    void HeatPumpController::processNetTxResults()
+    {
+        NetTxResult result{};
+        while (netTxResultQueue_ != nullptr &&
+               xQueueReceive(netTxResultQueue_, &result, 0U) == pdTRUE)
+        {
+            if (!pending_.active ||
+                pending_.command.commandId != result.commandId ||
+                pending_.command.type != result.commandType)
+            {
+                continue;
+            }
+
+            if (result.status == NetTxStatus::Sent)
+            {
+                pending_.phase = PendingPhase::AwaitingTelemetry;
+                pending_.transmittedAtMs = result.completedAtMs;
+            }
+            else if (result.status == NetTxStatus::Expired)
+            {
+                completePending(poolwire::CommandAckStage::Rejected,
+                                poolwire::AckResult::Expired,
+                                6U);
+            }
+            else
+            {
+                completePending(poolwire::CommandAckStage::Failed,
+                                poolwire::AckResult::ApplicationFailed,
+                                7U);
+            }
+        }
+    }
+
+    void HeatPumpController::processPendingConfirmation(const HeatPumpData& snapshot)
+    {
+        if (!pending_.active) return;
+
+        const uint32_t now = millis();
+        if (!pending_.safetyStop &&
+            static_cast<int32_t>(pending_.command.localExpiresAtMs - now) <= 0)
+        {
+            completePending(poolwire::CommandAckStage::Failed,
+                            poolwire::AckResult::Expired,
+                            8U);
+            return;
+        }
+
+        if (pending_.phase != PendingPhase::AwaitingTelemetry) return;
+
+        if (snapshot.configurationValid &&
+            snapshot.lastConfigFrameMs >= pending_.transmittedAtMs &&
+            NetConfiguration::matches(snapshot.configFrame, pending_.command))
+        {
+            completePending(poolwire::CommandAckStage::AppliedLocally,
+                            poolwire::AckResult::Accepted,
+                            0U);
+            return;
+        }
+
+        if (static_cast<uint32_t>(now - pending_.transmittedAtMs) >=
+            config::control::kCommandConfirmationTimeoutMs)
+        {
+            completePending(poolwire::CommandAckStage::Failed,
+                            poolwire::AckResult::ApplicationFailed,
+                            9U);
+        }
+    }
+
+    void HeatPumpController::rejectQueuedCommandsForSafety()
+    {
+        HeatPumpCommand queued{};
+        while (commandQueue_ != nullptr && xQueueReceive(commandQueue_, &queued, 0U) == pdTRUE)
+        {
+            if (queued.type != HeatPumpCommandType::SafetyStop)
+            {
+                sendResult(queued,
+                           poolwire::CommandAckStage::Rejected,
+                           poolwire::AckResult::Rejected,
+                           10U);
+            }
+        }
+    }
+
+    void HeatPumpController::processSafetyRequest(const HeatPumpData& snapshot)
+    {
+        HeatPumpCommand front{};
+        if (commandQueue_ != nullptr &&
+            xQueuePeek(commandQueue_, &front, 0U) == pdTRUE &&
+            front.type == HeatPumpCommandType::SafetyStop)
+        {
+            xQueueReceive(commandQueue_, &front, 0U);
+            safetyStopRequested_ = true;
+
+            if (pending_.active)
+            {
+                completePending(poolwire::CommandAckStage::Failed,
+                                poolwire::AckResult::ApplicationFailed,
+                                10U);
+            }
+            rejectQueuedCommandsForSafety();
+        }
+
+        if (!safetyStopRequested_ || pending_.active) return;
+
+        HeatPumpCommand stop{};
+        stop.type = HeatPumpCommandType::SafetyStop;
+        stop.powerOn = false;
+        submitConfigCommand(stop, snapshot, true);
+    }
+
+    void HeatPumpController::processNextCommand(const HeatPumpData& snapshot)
+    {
+        if (pending_.active || safetyStopRequested_ || commandQueue_ == nullptr) return;
+
+        HeatPumpCommand command{};
+        if (xQueueReceive(commandQueue_, &command, 0U) != pdTRUE) return;
+
+        const uint32_t now = millis();
+        if (command.type == HeatPumpCommandType::SafetyStop)
+        {
+            safetyStopRequested_ = true;
+            processSafetyRequest(snapshot);
+            return;
+        }
+
+        if (static_cast<int32_t>(command.localExpiresAtMs - now) <= 0)
+        {
+            sendResult(command,
+                       poolwire::CommandAckStage::Rejected,
+                       poolwire::AckResult::Expired,
+                       1U);
+            return;
+        }
+
+        if (command.type == HeatPumpCommandType::RequestStatus)
+        {
+            const bool netOnline = netStateIsCurrent(snapshot, now);
+            sendResult(command,
+                       netOnline
+                           ? poolwire::CommandAckStage::AppliedLocally
+                           : poolwire::CommandAckStage::Failed,
+                       netOnline
+                           ? poolwire::AckResult::Accepted
+                           : poolwire::AckResult::ApplicationFailed,
+                       netOnline ? 0U : 3U);
+            return;
+        }
+
+        submitConfigCommand(command, snapshot, false);
+    }
+
     void HeatPumpController::processControl()
     {
-        const HeatPumpData snap = state_.snapshot();
+        HeatPumpData snapshot = state_.snapshot();
+        if (snapshot.powerStateValid)
+        {
+            powerGuard_.observe(snapshot.powerOn, millis());
+        }
 
-        const bool status = (snap.powerStateValid && snap.powerOn) || snap.compressorRunning;
-        statusLed_.set(status);
+        statusLed_.set((snapshot.powerStateValid && snapshot.powerOn) ||
+                       snapshot.compressorRunning);
 
-        uint8_t faultDetail = 0;
-        const led::Fault fault = evaluateFault(snap, faultDetail);
-
+        uint8_t faultDetail = 0U;
+        const led::Fault fault = evaluateFault(snapshot, faultDetail);
         errorLed_.setFault(fault, faultDetail);
         errorLed_.update();
 
@@ -295,110 +407,14 @@ namespace heatpump
                                 "fault changed: %s detail=%u",
                                 faultToString(fault),
                                 static_cast<unsigned>(faultDetail));
-
             lastFault_ = fault;
         }
 
-        HeatPumpCommand command{};
-
-        while (xQueueReceive(commandQueue_, &command, 0) == pdTRUE)
-        {
-            logger::Logger::log(logger::Type::Control,
-                                "command received type=%u power=%u target=%.1f mode=%u",
-                                static_cast<unsigned>(command.type),
-                                command.powerOn ? 1 : 0,
-                                command.targetTemperature,
-                                static_cast<unsigned>(command.mode));
-
-            if (command.type == HeatPumpCommandType::Power && !allowedByMinTimes(command.powerOn))
-            {
-                logger::Logger::log(logger::Type::Control,
-                                    "power command blocked by min run/off-time guard");
-                continue;
-            }
-
-            sendCommandUnsafeUntilProtocolVerified(command);
-        }
-
-        if (snap.powerStateValid && snap.powerOn != lastPowerState_)
-        {
-            lastPowerState_ = snap.powerOn;
-            lastPowerChangeMs_ = millis();
-            lowCurrentSinceMs_ = 0;
-        }
-    }
-
-    void HeatPumpController::sendCommandUnsafeUntilProtocolVerified(const HeatPumpCommand& command)
-    {
-        static uint8_t configFrame[kConfigFrameSize] =
-        {
-            0x81, 0xB1, 0x26, 0x72, 0x76, 0x74,
-            0x3D, 0x3D, 0x3D, 0x3D, 0x3C, 0xE4
-        };
-
-        switch (command.type)
-        {
-            case HeatPumpCommandType::Power:
-            {
-                setPower(configFrame, command.powerOn);
-                updateChecksum12(configFrame);
-
-                logger::Logger::log(logger::Type::Control,
-                                    "NET command: power %s",
-                                    command.powerOn ? "ON" : "OFF");
-
-                break;
-            }
-
-            case HeatPumpCommandType::SetTemperature:
-            {
-                setTargetTemperatureForCurrentMode(configFrame, command.targetTemperature);
-                updateChecksum12(configFrame);
-
-                logger::Logger::log(logger::Type::Control,
-                                    "NET command: target %.1fC",
-                                    command.targetTemperature);
-
-                break;
-            }
-
-            case HeatPumpCommandType::SetMode:
-            {
-                setMode(configFrame, command.mode);
-                updateChecksum12(configFrame);
-
-                logger::Logger::log(logger::Type::Control,
-                                    "NET command: mode %u",
-                                    static_cast<unsigned>(command.mode));
-
-                break;
-            }
-
-            case HeatPumpCommandType::RequestStatus:
-            {
-                logger::Logger::log(logger::Type::Control,
-                                    "NET command: request status ignored; status is sent periodically");
-
-                return;
-            }
-
-            default:
-            {
-                logger::Logger::log(logger::Type::Control,
-                                    "NET command rejected: unknown type=%u",
-                                    static_cast<unsigned>(command.type));
-
-                return;
-            }
-        }
-
-        char hex[3 * kConfigFrameSize + 1]{};
-        frameToHex(configFrame, hex, sizeof(hex));
-
-        logger::Logger::log(logger::Type::Control,
-                            "NET TX config frame: %s",
-                            hex);
-
-        bus_.sendBytesSafe(configFrame, kConfigFrameSize);
+        processSafetyRequest(snapshot);
+        processNetTxResults();
+        snapshot = state_.snapshot();
+        processPendingConfirmation(snapshot);
+        processSafetyRequest(snapshot);
+        processNextCommand(snapshot);
     }
 }

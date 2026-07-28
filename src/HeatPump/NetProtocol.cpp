@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace
 {
@@ -118,12 +119,14 @@ namespace heatpump
 
         if (frame.byteCount == config::netbus::kLongFrameBytes)
         {
-            return checksum12Ok(frame.bytes);
+            return frame.bitCount == config::netbus::kLongFrameBytes * 8U &&
+                   checksum12Ok(frame.bytes);
         }
 
         if (frame.byteCount == config::netbus::kShortFrameBytes)
         {
-            return checksum9Ok(frame.bytes);
+            return frame.bitCount == config::netbus::kShortFrameBytes * 8U &&
+                   checksum9Ok(frame.bytes);
         }
 
         return false;
@@ -177,7 +180,7 @@ namespace heatpump
                                 "short frame ok but ignored: type=0x%02X subtype=0x%02X",
                                 frame.bytes[0],
                                 frame.bytes[1]);
-            return false;
+            return true;
         }
 
         const uint8_t* bytes = frame.bytes;
@@ -197,6 +200,7 @@ namespace heatpump
                 const float waterTemperature = decodeTemperature(bytes[9]);
 
                 outData.waterTemperature = waterTemperature;
+                outData.validFields |= WaterTemperatureField;
 
                 logger::Logger::log(logger::Type::Protocol,
                                     "D1 conditions1: water/t02=%.1fC raw=0x%02X",
@@ -220,7 +224,7 @@ namespace heatpump
                                     coil,
                                     temp4);
 
-                return false;
+                return true;
             }
 
             case 0x81:
@@ -239,6 +243,14 @@ namespace heatpump
                 outData.powerStateValid = true;
                 outData.mode = mode;
                 outData.targetTemperature = selectedTarget;
+                outData.validFields |= PowerStateField |
+                                       ModeField |
+                                       TargetTemperatureField |
+                                       ConfigurationField;
+                std::memcpy(outData.configFrame,
+                            frame.bytes,
+                            config::netbus::kLongFrameBytes);
+                outData.configurationValid = true;
 
                 logger::Logger::log(logger::Type::Protocol,
                                     "81 conf1: power=%u mode=%s modeByte=0x%02X cool=%.1fC heat=%.1fC auto=%.1fC selected=%.1fC",
@@ -256,31 +268,31 @@ namespace heatpump
             case 0x82:
             {
               //  logger::Logger::log(logger::Type::Protocol, "82 config/status frame ok, currently not decoded");
-                return false;
+                return true;
             }
 
             case 0x83:
             {
                //  logger::Logger::log(logger::Type::Protocol, "83 config/status frame ok, currently not decoded");
-                return false;
+                return true;
             }
 
             case 0x84:
             {
                 // logger::Logger::log(logger::Type::Protocol, "84 config/status frame ok, currently not decoded");
-                return false;
+                return true;
             }
 
             case 0x85:
             {
                //  logger::Logger::log(logger::Type::Protocol, "85 config/status frame ok, currently not decoded");
-                return false;
+                return true;
             }
 
             case 0x86:
             {
               //   logger::Logger::log(logger::Type::Protocol, "86 config/status frame ok, currently not decoded");
-                return false;
+                return true;
             }
 
             default:

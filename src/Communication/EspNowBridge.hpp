@@ -8,18 +8,22 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
+#include <atomic>
 #include <cstdint>
 
-#include "Communication/Protocol.hpp"
+#include <PoolWireProtocol.hpp>
 #include "HeatPump/HeatPumpState.hpp"
 #include "HeatPump/HeatPumpController.hpp"
+#include "HeatPump/BridgeWatchdog.hpp"
 
 namespace communication
 {
     class EspNowBridge
     {
     public:
-        EspNowBridge( heatpump::HeatPumpState& state, QueueHandle_t commandQueue);
+        EspNowBridge(heatpump::HeatPumpState& state,
+                     QueueHandle_t commandQueue,
+                     QueueHandle_t commandResultQueue);
 
         void begin();
 
@@ -28,9 +32,9 @@ namespace communication
         bool injectCommand(const heatpump::HeatPumpCommand& command);
 
     private:
-        static void onRecvThunk(const uint8_t* mac, const uint8_t* data, int len);
+        static void onRecvThunk(const esp_now_recv_info_t* info, const uint8_t* data, int len);
 
-        static void onSentThunk(const uint8_t* mac, esp_now_send_status_t status);
+        static void onSentThunk(const wifi_tx_info_t* info, esp_now_send_status_t status);
 
         void onRecv(const uint8_t* mac, const uint8_t* data, int len);
 
@@ -43,12 +47,23 @@ namespace communication
         bool addBroadcastPeer();
 
         void rememberPeer(const uint8_t mac[6]);
+        bool snapshotPeer(uint8_t out[6]) const;
+        void requestSafetyStop();
 
-        void sendDiscoverAck(const uint8_t* mac);
+        void sendPairing(const uint8_t* mac, poolwire::PairingAction action);
+
+        void sendCommandAck(const uint8_t* mac,
+                            uint32_t commandId,
+                            poolwire::CommandAckStage stage,
+                            poolwire::AckResult result,
+                            uint16_t errorCode = 0U);
 
         void sendStatus();
 
-        [[nodiscard]] HeatPumpDataPacket makeStatusPacket() const;
+        [[nodiscard]] poolwire::HeatPumpTelemetry makeStatusPayload() const;
+
+        [[nodiscard]] poolwire::Envelope nextEnvelope(poolwire::NodeId destination,
+                                                      uint32_t commandId = 0U);
 
         static bool isBroadcastMac(const uint8_t mac[6]);
 
@@ -56,22 +71,31 @@ namespace communication
 
         static void macToString(const uint8_t mac[6], char out[18]);
 
-        static bool convertCommandPacket(const HeatPumpCommandPacket& packet, heatpump::HeatPumpCommand& outCommand);
+        static bool convertCommandPayload(const poolwire::HeatPumpCommand& payload,
+                                          heatpump::HeatPumpCommand& outCommand);
 
         heatpump::HeatPumpState& state_;
         QueueHandle_t commandQueue_;
+        QueueHandle_t commandResultQueue_;
 
         uint8_t peerMac_[6]{};
         bool peerValid_{false};
+        mutable portMUX_TYPE stateMux_ = portMUX_INITIALIZER_UNLOCKED;
+        portMUX_TYPE commandLedgerMux_ = portMUX_INITIALIZER_UNLOCKED;
 
         uint32_t lastStatusSendMs_{0};
         uint32_t lastStatusLogMs_{0};
-        uint32_t lastRxMs_{0};
+        std::atomic<uint32_t> lastRxMs_{0U};
         uint32_t lastTxMs_{0};
+        heatpump::BridgeWatchdog bridgeWatchdog_;
 
         esp_err_t lastSendResult_{ESP_FAIL};
 
         esp_now_send_status_t lastSendStatus_{ESP_NOW_SEND_FAIL};
+
+        std::atomic<uint32_t> nextSequence_{1U};
+        poolwire::SequenceTracker receivedSequences_;
+        poolwire::CommandLedger commandLedger_;
 
         static EspNowBridge* instance_;
     };
