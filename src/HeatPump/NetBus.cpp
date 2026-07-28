@@ -178,17 +178,33 @@ namespace heatpump
             return false;
         }
 
-        pullLow();
-        delayMicroseconds(9000);
-        releaseBus();
-        delayMicroseconds(5000);
-
-        for (size_t i = 0; i < bitCount; ++i) 
+        for (uint8_t occurrence = 0U;
+             occurrence < config::netbus::kTxCommandRepeatCount;
+             ++occurrence)
         {
             pullLow();
-            delayMicroseconds(config::netbus::kTxLowUs);
+            delayMicroseconds(9000U);
             releaseBus();
-            delayMicroseconds(bits[i] ? config::netbus::kTxHighOneUs : config::netbus::kTxHighZeroUs);
+            delayMicroseconds(5000U);
+
+            for (size_t bitIndex = 0U; bitIndex < bitCount; ++bitIndex)
+            {
+                pullLow();
+                delayMicroseconds(config::netbus::kTxLowUs);
+                releaseBus();
+                delayMicroseconds(bits[bitIndex]
+                    ? config::netbus::kTxHighOneUs
+                    : config::netbus::kTxHighZeroUs);
+            }
+
+            pullLow();
+            delayMicroseconds(config::netbus::kTxInterFrameLowUs);
+            releaseBus();
+
+            if (occurrence + 1U < config::netbus::kTxCommandRepeatCount)
+            {
+                delayMicroseconds(config::netbus::kTxInterFrameHighUs);
+            }
         }
 
         releaseBus();
@@ -222,9 +238,10 @@ namespace heatpump
         }
 
         logger::Logger::log(logger::Type::NetBus,
-                            "TX raw frame bytes=%u bits=%u zeroHigh=%luus oneHigh=%luus",
+                            "TX command burst bytes=%u bits=%u repeats=%u zeroHigh=%luus oneHigh=%luus",
                             static_cast<unsigned>(byteCount),
                             static_cast<unsigned>(bitCount),
+                            static_cast<unsigned>(config::netbus::kTxCommandRepeatCount),
                             static_cast<unsigned long>(config::netbus::kTxHighZeroUs),
                             static_cast<unsigned long>(config::netbus::kTxHighOneUs));
 

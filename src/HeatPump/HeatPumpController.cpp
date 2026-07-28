@@ -272,7 +272,8 @@ namespace heatpump
         if (!pending_.active) return;
 
         const uint32_t now = millis();
-        if (!pending_.safetyStop &&
+        if (pending_.phase == PendingPhase::AwaitingTransmit &&
+            !pending_.safetyStop &&
             static_cast<int32_t>(pending_.command.localExpiresAtMs - now) <= 0)
         {
             completePending(poolwire::CommandAckStage::Failed,

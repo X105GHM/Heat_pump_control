@@ -4,6 +4,7 @@
 #include "HeatPump/NetConfiguration.hpp"
 #include "HeatPump/NetProtocol.hpp"
 #include "HeatPump/PowerCycleGuard.hpp"
+#include "Config/AppConfig.hpp"
 
 #include <array>
 #include <cmath>
@@ -140,6 +141,11 @@ namespace
         expect(heatpump::NetConfiguration::apply(before.data(), power, output),
                "power mutation built");
         expect((output[2] & 0x01U) != 0U, "power bit changed");
+        const std::array<uint8_t, 12> expectedPowerOn =
+            {0x81U, 0xB1U, 0x27U, 0x72U, 0x76U, 0x74U,
+             0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xE5U};
+        expect(std::memcmp(output, expectedPowerOn.data(), expectedPowerOn.size()) == 0,
+               "power command has expected byte sequence");
         expectPreserved(before, output, 2U, "power preserves unrelated settings");
         expect(heatpump::NetConfiguration::isValid(output, sizeof(output)),
                "power mutation checksum updated");
@@ -150,6 +156,11 @@ namespace
         expect(heatpump::NetConfiguration::apply(before.data(), setpoint, output),
                "setpoint mutation built");
         expect(output[5] != before[5], "auto setpoint field changed");
+        const std::array<uint8_t, 12> expectedSetpoint =
+            {0x81U, 0xB1U, 0x26U, 0x72U, 0x76U, 0x78U,
+             0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xE8U};
+        expect(std::memcmp(output, expectedSetpoint.data(), expectedSetpoint.size()) == 0,
+               "setpoint command has expected byte sequence");
         expectPreserved(before, output, 5U, "setpoint preserves unrelated settings");
 
         heatpump::HeatPumpCommand mode{};
@@ -158,11 +169,29 @@ namespace
         expect(heatpump::NetConfiguration::apply(before.data(), mode, output),
                "mode mutation built");
         expect((output[2] & 0x30U) == 0x10U, "mode bits changed to heat");
+        const std::array<uint8_t, 12> expectedHeatMode =
+            {0x81U, 0xB1U, 0x16U, 0x72U, 0x76U, 0x74U,
+             0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xD4U};
+        expect(std::memcmp(output, expectedHeatMode.data(), expectedHeatMode.size()) == 0,
+               "mode command has expected byte sequence");
         expectPreserved(before, output, 2U, "mode preserves unrelated settings");
 
         uint8_t unknown[12]{};
         expect(!heatpump::NetConfiguration::apply(unknown, power, output),
                "normal command rejected without valid source configuration");
+    }
+
+    void testCommandTransmissionProfile()
+    {
+        expect(config::netbus::kTxHighZeroUs == 1000U,
+               "command zero uses short HIGH pulse");
+        expect(config::netbus::kTxHighOneUs == 3000U,
+               "command one uses long HIGH pulse");
+        expect(config::netbus::kTxCommandRepeatCount == 8U,
+               "command frame is repeated eight times");
+        expect(config::netbus::kTxInterFrameLowUs == 1000U &&
+               config::netbus::kTxInterFrameHighUs == 100000U,
+               "command repetitions use captured NET-bus spacing");
     }
 
     void testArbitrationAndProtectionTimes()
@@ -209,6 +238,7 @@ int main()
     testChecksumsAndLengths();
     testFrameKindsAndPartialUpdates();
     testConfigurationMutations();
+    testCommandTransmissionProfile();
     testArbitrationAndProtectionTimes();
     testNetOutageAndReconnect();
     if (failures == 0) std::cout << "HeatPumpLogicTests passed\n";
