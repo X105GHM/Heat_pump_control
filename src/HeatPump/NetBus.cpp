@@ -1,6 +1,28 @@
 #include "HeatPump/NetBus.hpp"
 #include "Logger/Logger.hpp"
 
+#include <cstdio>
+
+namespace
+{
+    void bytesToHex(const uint8_t* bytes,
+                    const size_t byteCount,
+                    char* output,
+                    const size_t outputSize)
+    {
+        size_t position = 0U;
+        for (size_t index = 0U;
+             index < byteCount && position + 3U < outputSize;
+             ++index)
+        {
+            position += std::snprintf(output + position,
+                                      outputSize - position,
+                                      "%02X ",
+                                      bytes[index]);
+        }
+    }
+}
+
 namespace heatpump
 {
     void NetBus::begin()
@@ -38,12 +60,12 @@ namespace heatpump
 
         if (isShort) 
         {
-            return config::netbus::kLongHighMeansOne ? NetBit::Zero : NetBit::One;
+            return config::netbus::kRxLongHighMeansOne ? NetBit::Zero : NetBit::One;
         }
 
         if (isLong) 
         {
-            return config::netbus::kLongHighMeansOne ? NetBit::One : NetBit::Zero;
+            return config::netbus::kRxLongHighMeansOne ? NetBit::One : NetBit::Zero;
         }
 
         return NetBit::Unknown;
@@ -147,6 +169,7 @@ namespace heatpump
             const uint32_t bitHighUs = measureLevelDuration(true, config::netbus::kMaxPulseUs);
             if (bitHighUs >= config::netbus::kFrameGapUs) 
             {
+                outFrame.completedAtUs = micros() - bitHighUs;
                 break;
             }
 
@@ -178,36 +201,25 @@ namespace heatpump
             return false;
         }
 
-        for (uint8_t occurrence = 0U;
-             occurrence < config::netbus::kTxCommandRepeatCount;
-             ++occurrence)
+        pullLow();
+        delayMicroseconds(9000U);
+        releaseBus();
+        delayMicroseconds(5000U);
+
+        for (size_t bitIndex = 0U; bitIndex < bitCount; ++bitIndex)
         {
             pullLow();
-            delayMicroseconds(9000U);
+            delayMicroseconds(config::netbus::kTxLowUs);
             releaseBus();
-            delayMicroseconds(5000U);
-
-            for (size_t bitIndex = 0U; bitIndex < bitCount; ++bitIndex)
-            {
-                pullLow();
-                delayMicroseconds(config::netbus::kTxLowUs);
-                releaseBus();
-                delayMicroseconds(bits[bitIndex]
-                    ? config::netbus::kTxHighOneUs
-                    : config::netbus::kTxHighZeroUs);
-            }
-
-            pullLow();
-            delayMicroseconds(config::netbus::kTxInterFrameLowUs);
-            releaseBus();
-
-            if (occurrence + 1U < config::netbus::kTxCommandRepeatCount)
-            {
-                delayMicroseconds(config::netbus::kTxInterFrameHighUs);
-            }
+            delayMicroseconds(bits[bitIndex]
+                ? config::netbus::kTxHighOneUs
+                : config::netbus::kTxHighZeroUs);
         }
 
+        pullLow();
+        delayMicroseconds(config::netbus::kTxTrailingLowUs);
         releaseBus();
+
         return true;
     }
 
@@ -237,15 +249,28 @@ namespace heatpump
             }
         }
 
+        char hex[3U * config::netbus::kMaxBytesPerFrame + 1U]{};
+        bytesToHex(bytes, byteCount, hex, sizeof(hex));
+        const uint32_t startedAtUs = micros();
         logger::Logger::log(logger::Type::NetBus,
-                            "TX command burst bytes=%u bits=%u repeats=%u zeroHigh=%luus oneHigh=%luus",
+                            "NET TX start t_us=%lu bytes=%u bits=%u rxLongIsOne=%u txLongIsOne=%u zeroHigh=%luus oneHigh=%luus frame=%s",
+                            static_cast<unsigned long>(startedAtUs),
                             static_cast<unsigned>(byteCount),
                             static_cast<unsigned>(bitCount),
-                            static_cast<unsigned>(config::netbus::kTxCommandRepeatCount),
+                            config::netbus::kRxLongHighMeansOne ? 1U : 0U,
+                            config::netbus::kTxLongHighMeansOne ? 1U : 0U,
                             static_cast<unsigned long>(config::netbus::kTxHighZeroUs),
-                            static_cast<unsigned long>(config::netbus::kTxHighOneUs));
+                            static_cast<unsigned long>(config::netbus::kTxHighOneUs),
+                            hex);
 
-        return sendBitsSafe(bits, bitCount);
+        const bool sent = sendBitsSafe(bits, bitCount);
+        const uint32_t completedAtUs = micros();
+        logger::Logger::log(logger::Type::NetBus,
+                            "NET TX complete t_us=%lu duration_us=%lu result=%s",
+                            static_cast<unsigned long>(completedAtUs),
+                            static_cast<unsigned long>(completedAtUs - startedAtUs),
+                            sent ? "sent" : "failed");
+        return sent;
     }
 
     bool NetBus::waitForIdleHigh(const uint32_t idleUs, const uint32_t timeoutUs) const

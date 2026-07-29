@@ -4,7 +4,79 @@
 #include "Config/AppConfig.hpp"
 #include "Logger/Logger.hpp"
 
+#include <cstdio>
 #include <cstring>
+
+namespace
+{
+    const char* commandTypeToString(const heatpump::HeatPumpCommandType type)
+    {
+        switch (type)
+        {
+            case heatpump::HeatPumpCommandType::Power: return "Power";
+            case heatpump::HeatPumpCommandType::SetTemperature: return "SetTemperature";
+            case heatpump::HeatPumpCommandType::SetMode: return "SetMode";
+            case heatpump::HeatPumpCommandType::RequestStatus: return "RequestStatus";
+            case heatpump::HeatPumpCommandType::SafetyStop: return "SafetyStop";
+            default: return "Unknown";
+        }
+    }
+
+    const char* txStatusToString(const heatpump::NetTxStatus status)
+    {
+        switch (status)
+        {
+            case heatpump::NetTxStatus::Sent: return "Sent";
+            case heatpump::NetTxStatus::Expired: return "Expired";
+            case heatpump::NetTxStatus::Failed:
+            default: return "Failed";
+        }
+    }
+
+    const char* ackStageToString(const poolwire::CommandAckStage stage)
+    {
+        switch (stage)
+        {
+            case poolwire::CommandAckStage::ReceivedByNode: return "ReceivedByNode";
+            case poolwire::CommandAckStage::AppliedLocally: return "AppliedLocally";
+            case poolwire::CommandAckStage::Rejected: return "Rejected";
+            case poolwire::CommandAckStage::Failed:
+            default: return "Failed";
+        }
+    }
+
+    const char* ackResultToString(const poolwire::AckResult result)
+    {
+        switch (result)
+        {
+            case poolwire::AckResult::Accepted: return "Accepted";
+            case poolwire::AckResult::Rejected: return "Rejected";
+            case poolwire::AckResult::QueueFull: return "QueueFull";
+            case poolwire::AckResult::InvalidPayload: return "InvalidPayload";
+            case poolwire::AckResult::Expired: return "Expired";
+            case poolwire::AckResult::Superseded: return "Superseded";
+            case poolwire::AckResult::ApplicationFailed:
+            default: return "ApplicationFailed";
+        }
+    }
+
+    void frameToHex(const uint8_t* frame,
+                    const size_t frameSize,
+                    char* output,
+                    const size_t outputSize)
+    {
+        size_t position = 0U;
+        for (size_t index = 0U;
+             index < frameSize && position + 3U < outputSize;
+             ++index)
+        {
+            position += std::snprintf(output + position,
+                                      outputSize - position,
+                                      "%02X ",
+                                      frame[index]);
+        }
+    }
+}
 
 namespace heatpump
 {
@@ -135,6 +207,16 @@ namespace heatpump
                                              const uint16_t errorCode)
     {
         if (!pending_.active) return;
+        logger::Logger::log(logger::Type::Control,
+                            "command final id=%lu type=%s stage=%s result=%s error=%u response_ms=%lu",
+                            static_cast<unsigned long>(pending_.command.commandId),
+                            commandTypeToString(pending_.command.type),
+                            ackStageToString(stage),
+                            ackResultToString(result),
+                            static_cast<unsigned>(errorCode),
+                            pending_.transmittedAtMs == 0U
+                                ? 0UL
+                                : static_cast<unsigned long>(millis() - pending_.transmittedAtMs));
         sendResult(pending_.command, stage, result, errorCode);
 
         if (pending_.safetyStop && stage == poolwire::CommandAckStage::AppliedLocally)
@@ -211,6 +293,20 @@ namespace heatpump
         request.localExpiresAtMs = safetyStop ? UINT32_MAX : command.localExpiresAtMs;
         request.reportResult = true;
 
+        char hex[3U * NetConfiguration::kFrameSize + 1U]{};
+        frameToHex(request.bytes, request.byteCount, hex, sizeof(hex));
+        logger::Logger::log(logger::Type::Control,
+                            "command prepared id=%lu sequence=%lu type=%s power=%u target=%.1f mode=%u messageType=%u expectedResponse=0x81/B1 checksum=0x%02X frame=%s",
+                            static_cast<unsigned long>(command.commandId),
+                            static_cast<unsigned long>(command.sequenceNumber),
+                            commandTypeToString(command.type),
+                            command.powerOn ? 1U : 0U,
+                            command.targetTemperature,
+                            static_cast<unsigned>(command.mode),
+                            static_cast<unsigned>(poolwire::MessageType::HeatPumpCommand),
+                            request.bytes[NetConfiguration::kFrameSize - 1U],
+                            hex);
+
         if (netTxQueue_ == nullptr || xQueueSend(netTxQueue_, &request, 0U) != pdTRUE)
         {
             if (!safetyStop)
@@ -247,6 +343,13 @@ namespace heatpump
                 continue;
             }
 
+            logger::Logger::log(logger::Type::Control,
+                                "NET TX result id=%lu type=%s status=%s completed_ms=%lu",
+                                static_cast<unsigned long>(result.commandId),
+                                commandTypeToString(result.commandType),
+                                txStatusToString(result.status),
+                                static_cast<unsigned long>(result.completedAtMs));
+
             if (result.status == NetTxStatus::Sent)
             {
                 pending_.phase = PendingPhase::AwaitingTelemetry;
@@ -272,8 +375,7 @@ namespace heatpump
         if (!pending_.active) return;
 
         const uint32_t now = millis();
-        if (pending_.phase == PendingPhase::AwaitingTransmit &&
-            !pending_.safetyStop &&
+        if (!pending_.safetyStop &&
             static_cast<int32_t>(pending_.command.localExpiresAtMs - now) <= 0)
         {
             completePending(poolwire::CommandAckStage::Failed,
@@ -284,9 +386,41 @@ namespace heatpump
 
         if (pending_.phase != PendingPhase::AwaitingTelemetry) return;
 
-        if (snapshot.configurationValid &&
-            snapshot.lastConfigFrameMs >= pending_.transmittedAtMs &&
-            NetConfiguration::matches(snapshot.configFrame, pending_.command))
+        const bool freshConfiguration =
+            snapshot.configurationValid &&
+            snapshot.lastConfigFrameMs >= pending_.transmittedAtMs;
+        const bool matches = freshConfiguration &&
+            NetConfiguration::matches(snapshot.configFrame, pending_.command);
+
+        if (freshConfiguration &&
+            snapshot.lastConfigFrameMs != pending_.lastObservedConfigFrameMs)
+        {
+            pending_.lastObservedConfigFrameMs = snapshot.lastConfigFrameMs;
+            char actualHex[3U * NetConfiguration::kFrameSize + 1U]{};
+            char expectedHex[3U * NetConfiguration::kFrameSize + 1U]{};
+            frameToHex(snapshot.configFrame,
+                       NetConfiguration::kFrameSize,
+                       actualHex,
+                       sizeof(actualHex));
+            frameToHex(pending_.expectedFrame,
+                       NetConfiguration::kFrameSize,
+                       expectedHex,
+                       sizeof(expectedHex));
+            logger::Logger::log(logger::Type::Control,
+                                "NET readback id=%lu response_ms=%lu checksum=%s status=%s expected=%s actual=%s",
+                                static_cast<unsigned long>(pending_.command.commandId),
+                                static_cast<unsigned long>(snapshot.lastConfigFrameMs -
+                                                           pending_.transmittedAtMs),
+                                NetConfiguration::isValid(snapshot.configFrame,
+                                                          NetConfiguration::kFrameSize)
+                                    ? "OK"
+                                    : "BAD",
+                                matches ? "confirmed" : "mismatch",
+                                expectedHex,
+                                actualHex);
+        }
+
+        if (matches)
         {
             completePending(poolwire::CommandAckStage::AppliedLocally,
                             poolwire::AckResult::Accepted,
@@ -351,6 +485,16 @@ namespace heatpump
 
         HeatPumpCommand command{};
         if (xQueueReceive(commandQueue_, &command, 0U) != pdTRUE) return;
+
+        logger::Logger::log(logger::Type::Control,
+                            "command requested id=%lu sequence=%lu type=%s power=%u target=%.1f mode=%u expires_ms=%lu",
+                            static_cast<unsigned long>(command.commandId),
+                            static_cast<unsigned long>(command.sequenceNumber),
+                            commandTypeToString(command.type),
+                            command.powerOn ? 1U : 0U,
+                            command.targetTemperature,
+                            static_cast<unsigned>(command.mode),
+                            static_cast<unsigned long>(command.localExpiresAtMs));
 
         const uint32_t now = millis();
         if (command.type == HeatPumpCommandType::SafetyStop)

@@ -23,7 +23,7 @@ namespace config
         static constexpr uint32_t kLongHighMinUs = 2200;
         static constexpr uint32_t kLongHighMaxUs = 4200;
 
-        static constexpr bool kLongHighMeansOne = false;
+        static constexpr bool kRxLongHighMeansOne = false;
 
         static constexpr uint32_t kFrameGapUs = 12000;
         static constexpr uint32_t kMaxPulseUs = 30000;
@@ -32,13 +32,11 @@ namespace config
 
         static constexpr uint32_t kTxHighShortUs = 1000;
         static constexpr uint32_t kTxHighLongUs = 3000;
-        static constexpr uint32_t kTxHighZeroUs =
-            kLongHighMeansOne ? kTxHighShortUs : kTxHighLongUs;
-        static constexpr uint32_t kTxHighOneUs =
-            kLongHighMeansOne ? kTxHighLongUs : kTxHighShortUs;
-        static constexpr uint8_t kTxCommandRepeatCount = 8U;
-        static constexpr uint32_t kTxInterFrameLowUs = 1000U;
-        static constexpr uint32_t kTxInterFrameHighUs = 100000U;
+        static constexpr bool kTxLongHighMeansOne = true;
+        static constexpr uint32_t kTxHighZeroUs = kTxHighShortUs;
+        static constexpr uint32_t kTxHighOneUs = kTxHighLongUs;
+        static constexpr uint32_t kTxTrailingLowUs = 1000U;
+        static constexpr uint32_t kTxReplyDelayUs = 100000U;
 
         static constexpr size_t kShortFrameBytes = 9;
         static constexpr size_t kLongFrameBytes  = 12;
@@ -47,19 +45,20 @@ namespace config
         static constexpr size_t kMaxBytesPerFrame = 16;
 
         static constexpr uint32_t kBitHighZeroMinUs =
-            kLongHighMeansOne ? kShortHighMinUs : kLongHighMinUs;
+            kRxLongHighMeansOne ? kShortHighMinUs : kLongHighMinUs;
 
         static constexpr uint32_t kBitHighZeroMaxUs =
-            kLongHighMeansOne ? kShortHighMaxUs : kLongHighMaxUs;
+            kRxLongHighMeansOne ? kShortHighMaxUs : kLongHighMaxUs;
 
         static constexpr uint32_t kBitHighOneMinUs =
-            kLongHighMeansOne ? kLongHighMinUs : kShortHighMinUs;
+            kRxLongHighMeansOne ? kLongHighMinUs : kShortHighMinUs;
 
         static constexpr uint32_t kBitHighOneMaxUs =
-            kLongHighMeansOne ? kLongHighMaxUs : kShortHighMaxUs;
+            kRxLongHighMeansOne ? kLongHighMaxUs : kShortHighMaxUs;
 
         static_assert(kTxHighZeroUs != kTxHighOneUs);
-        static_assert(kTxCommandRepeatCount > 1U);
+        static_assert(kTxLongHighMeansOne != kRxLongHighMeansOne);
+        static_assert(kTxReplyDelayUs > kFrameGapUs);
     }
 
     namespace current
@@ -83,7 +82,7 @@ namespace config
         static constexpr uint32_t kMinRunTimeMs = 180000;
         static constexpr uint32_t kMinOffTimeMs = 180000;
         static constexpr uint32_t kMinNetCommandIntervalMs = 1000;
-        static constexpr uint32_t kCommandConfirmationTimeoutMs = 8000;
+        static constexpr uint32_t kCommandConfirmationTimeoutMs = 12000;
         static constexpr float kCompressorCurrentThresholdA = 0.7F;
         static constexpr uint32_t kStartupGraceMs = 15000;
         static constexpr uint32_t kNetConnectionTimeoutMs = 10000;

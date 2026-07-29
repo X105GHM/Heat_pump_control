@@ -148,12 +148,40 @@ namespace heatpump
         char hex[3 * config::netbus::kMaxBytesPerFrame + 1]{};
         bytesToHex(frame.bytes, frame.byteCount, hex, sizeof(hex));
 
-        /*logger::Logger::log(logger::Type::Protocol,
-                            "raw frame: bits=%u bytes=%u overflow=%u data=%s",
-                            frame.bitCount,
-                            frame.byteCount,
-                            frame.overflow ? 1 : 0,
-                            hex); */
+        uint8_t calculatedChecksum = 0U;
+        uint8_t receivedChecksum = 0U;
+        if (frame.byteCount == config::netbus::kLongFrameBytes)
+        {
+            uint16_t sum = 0U;
+            for (uint8_t index = 0U; index < 11U; ++index)
+            {
+                sum = static_cast<uint16_t>(sum + frame.bytes[index]);
+            }
+            calculatedChecksum = static_cast<uint8_t>(sum & 0xFFU);
+            receivedChecksum = frame.bytes[11];
+        }
+        else if (frame.byteCount == config::netbus::kShortFrameBytes)
+        {
+            uint16_t sum = 0U;
+            for (uint8_t index = 2U; index < 8U; ++index)
+            {
+                sum = static_cast<uint16_t>(sum + frame.bytes[index]);
+            }
+            calculatedChecksum = static_cast<uint8_t>(sum & 0xFFU);
+            receivedChecksum = frame.bytes[8];
+        }
+
+        logger::Logger::log(logger::Type::Protocol,
+                            "NET RX t_ms=%lu end_us=%lu bits=%u bytes=%u overflow=%u checksum=%s calculated=0x%02X received=0x%02X frame=%s",
+                            static_cast<unsigned long>(frame.timestampMs),
+                            static_cast<unsigned long>(frame.completedAtUs),
+                            static_cast<unsigned>(frame.bitCount),
+                            static_cast<unsigned>(frame.byteCount),
+                            frame.overflow ? 1U : 0U,
+                            checksumLooksValid(frame) ? "OK" : "BAD",
+                            calculatedChecksum,
+                            receivedChecksum,
+                            hex);
     }
 
     bool NetProtocol::decode(const NetRawFrame& frame, HeatPumpData& outData) const

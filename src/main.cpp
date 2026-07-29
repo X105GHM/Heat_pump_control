@@ -86,6 +86,7 @@ namespace
     {
         gNetBus.begin();
         heatpump::NetBusArbiter arbiter(config::control::kMinNetCommandIntervalMs);
+        heatpump::NetProtocol protocol;
         heatpump::NetRawFrame frame{};
         heatpump::NetTxRequest pendingTx{};
         bool hasPendingTx = false;
@@ -128,29 +129,6 @@ namespace
                 hasPendingTx = false;
             }
 
-            if (hasPendingTx && arbiter.beginTransmit(now))
-            {
-                const bool sent = gNetBus.sendBytesSafe(pendingTx.bytes,
-                                                        pendingTx.byteCount);
-                const uint32_t completedAtMs = millis();
-                arbiter.endTransmit(completedAtMs);
-                gTxLed.set(true);
-                txLedOffAtMs = completedAtMs + 50U;
-
-                if (pendingTx.reportResult)
-                {
-                    heatpump::NetTxResult result{};
-                    result.commandId = pendingTx.commandId;
-                    result.commandType = pendingTx.commandType;
-                    result.completedAtMs = completedAtMs;
-                    result.status = sent
-                        ? heatpump::NetTxStatus::Sent
-                        : heatpump::NetTxStatus::Failed;
-                    xQueueSend(gNetTxResultQueue, &result, 0U);
-                }
-                hasPendingTx = false;
-            }
-
             if (arbiter.beginReceive())
             {
                 const bool received = gNetBus.sniffFrame(frame);
@@ -165,6 +143,83 @@ namespace
                     {
                         logger::Logger::log(logger::Type::NetBus,
                                             "raw frame queue full; frame dropped");
+                    }
+
+                    const bool replyTrigger =
+                        frame.completedAtUs != 0U &&
+                        frame.byteCount == config::netbus::kLongFrameBytes &&
+                        frame.bytes[1] == 0xB1U &&
+                        protocol.checksumLooksValid(frame);
+
+                    if (hasPendingTx && replyTrigger)
+                    {
+                        const uint32_t replyAtUs =
+                            frame.completedAtUs + config::netbus::kTxReplyDelayUs;
+                        const uint32_t sendCallAtUs =
+                            replyAtUs - config::netbus::kFrameGapUs;
+                        logger::Logger::log(logger::Type::NetBus,
+                                            "NET TX scheduled commandId=%lu trigger=0x%02X/0x%02X frameEndUs=%lu replyAtUs=%lu",
+                                            static_cast<unsigned long>(pendingTx.commandId),
+                                            frame.bytes[0],
+                                            frame.bytes[1],
+                                            static_cast<unsigned long>(frame.completedAtUs),
+                                            static_cast<unsigned long>(replyAtUs));
+
+                        for (;;)
+                        {
+                            const int32_t remainingUs =
+                                static_cast<int32_t>(sendCallAtUs - micros());
+                            if (remainingUs <= 0) break;
+                            if (remainingUs > 1500)
+                            {
+                                vTaskDelay(pdMS_TO_TICKS(1));
+                            }
+                            else
+                            {
+                                delayMicroseconds(static_cast<uint32_t>(remainingUs));
+                            }
+                        }
+
+                        const uint32_t txNow = millis();
+                        const bool expired =
+                            pendingTx.localExpiresAtMs != UINT32_MAX &&
+                            static_cast<int32_t>(pendingTx.localExpiresAtMs - txNow) <= 0;
+
+                        if (expired)
+                        {
+                            if (pendingTx.reportResult)
+                            {
+                                heatpump::NetTxResult result{};
+                                result.commandId = pendingTx.commandId;
+                                result.commandType = pendingTx.commandType;
+                                result.completedAtMs = txNow;
+                                result.status = heatpump::NetTxStatus::Expired;
+                                xQueueSend(gNetTxResultQueue, &result, 0U);
+                            }
+                            hasPendingTx = false;
+                        }
+                        else if (arbiter.beginTransmit(txNow))
+                        {
+                            const bool sent = gNetBus.sendBytesSafe(pendingTx.bytes,
+                                                                    pendingTx.byteCount);
+                            const uint32_t completedAtMs = millis();
+                            arbiter.endTransmit(completedAtMs);
+                            gTxLed.set(true);
+                            txLedOffAtMs = completedAtMs + 50U;
+
+                            if (pendingTx.reportResult)
+                            {
+                                heatpump::NetTxResult result{};
+                                result.commandId = pendingTx.commandId;
+                                result.commandType = pendingTx.commandType;
+                                result.completedAtMs = completedAtMs;
+                                result.status = sent
+                                    ? heatpump::NetTxStatus::Sent
+                                    : heatpump::NetTxStatus::Failed;
+                                xQueueSend(gNetTxResultQueue, &result, 0U);
+                            }
+                            hasPendingTx = false;
+                        }
                     }
                 }
             }
@@ -182,11 +237,12 @@ namespace
         {
             if (xQueueReceive(gRawFrameQueue, &frame, portMAX_DELAY) == pdTRUE)
             {
+                heatpump::HeatPumpData decoded{};
+                const bool decodedOk = protocol.decode(frame, decoded);
                 if (protocol.checksumLooksValid(frame))
                 {
                     gState.markNetFrameReceived(frame.timestampMs);
-                    heatpump::HeatPumpData decoded{};
-                    if (protocol.decode(frame, decoded))
+                    if (decodedOk)
                     {
                         gState.updateFromDecoded(decoded, frame.timestampMs);
                     }

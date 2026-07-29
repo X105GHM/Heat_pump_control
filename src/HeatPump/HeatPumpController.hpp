@@ -31,6 +31,7 @@ namespace heatpump
             HeatPumpCommand command{};
             uint8_t expectedFrame[NetConfiguration::kFrameSize]{};
             uint32_t transmittedAtMs = 0U;
+            uint32_t lastObservedConfigFrameMs = 0U;
             PendingPhase phase = PendingPhase::AwaitingTransmit;
             bool active = false;
             bool safetyStop = false;

@@ -26,8 +26,8 @@ namespace
 
     std::array<uint8_t, heatpump::NetConfiguration::kFrameSize> configFrame()
     {
-        return {0x81U, 0xB1U, 0x26U, 0x72U, 0x76U, 0x74U,
-                0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xE4U};
+        return {0x81U, 0xB1U, 0x26U, 0x72U, 0x76U, 0x72U,
+                0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xE2U};
     }
 
     heatpump::NetRawFrame longFrame(const uint8_t type)
@@ -68,6 +68,34 @@ namespace
         shortFrame.bytes[7] = 6U;
         shortFrame.bytes[8] = 21U;
         expect(protocol.checksumLooksValid(shortFrame), "valid 9-byte checksum accepted");
+
+        const std::array<uint8_t, 12> originalDisplayFrame =
+            {0xCFU, 0xB1U, 0x00U, 0x00U, 0x09U, 0x0CU,
+             0x12U, 0x0FU, 0x10U, 0x00U, 0x00U, 0xC6U};
+        heatpump::NetRawFrame captured{};
+        captured.bitCount = 96U;
+        captured.byteCount = 12U;
+        std::memcpy(captured.bytes,
+                    originalDisplayFrame.data(),
+                    originalDisplayFrame.size());
+        expect(protocol.checksumLooksValid(captured),
+               "original-display CF/B1 frame checksum accepted");
+
+        uint32_t capturedDurationUs = 9000U + 5000U +
+            static_cast<uint32_t>(originalDisplayFrame.size() * 8U) *
+                config::netbus::kTxLowUs +
+            config::netbus::kTxTrailingLowUs;
+        for (const uint8_t value : originalDisplayFrame)
+        {
+            for (uint8_t bit = 0U; bit < 8U; ++bit)
+            {
+                capturedDurationUs += (value & (1U << bit)) != 0U
+                    ? config::netbus::kTxHighOneUs
+                    : config::netbus::kTxHighZeroUs;
+            }
+        }
+        expect(capturedDurationUs == 257000U,
+               "original-display frame reproduces captured pulse duration");
     }
 
     void testFrameKindsAndPartialUpdates()
@@ -142,13 +170,51 @@ namespace
                "power mutation built");
         expect((output[2] & 0x01U) != 0U, "power bit changed");
         const std::array<uint8_t, 12> expectedPowerOn =
-            {0x81U, 0xB1U, 0x27U, 0x72U, 0x76U, 0x74U,
-             0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xE5U};
+            {0x81U, 0xB1U, 0x27U, 0x72U, 0x76U, 0x72U,
+             0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xE3U};
         expect(std::memcmp(output, expectedPowerOn.data(), expectedPowerOn.size()) == 0,
                "power command has expected byte sequence");
         expectPreserved(before, output, 2U, "power preserves unrelated settings");
         expect(heatpump::NetConfiguration::isValid(output, sizeof(output)),
                "power mutation checksum updated");
+
+        heatpump::HeatPumpCommand powerOff{};
+        powerOff.type = heatpump::HeatPumpCommandType::Power;
+        powerOff.powerOn = false;
+        expect(heatpump::NetConfiguration::apply(expectedPowerOn.data(), powerOff, output),
+               "power-off mutation built from captured power-on readback");
+        expect(std::memcmp(output, before.data(), before.size()) == 0,
+               "power-off command matches original-display capture");
+
+        heatpump::HeatPumpCommand capturedTemperatureUp{};
+        capturedTemperatureUp.type = heatpump::HeatPumpCommandType::SetTemperature;
+        capturedTemperatureUp.targetTemperature = 27.5F;
+        const std::array<uint8_t, 12> expectedTemperatureUp =
+            {0x81U, 0xB1U, 0x26U, 0x72U, 0x76U, 0x73U,
+             0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xE3U};
+        expect(heatpump::NetConfiguration::apply(before.data(),
+                                                 capturedTemperatureUp,
+                                                 output),
+               "captured temperature-up mutation built");
+        expect(std::memcmp(output,
+                           expectedTemperatureUp.data(),
+                           expectedTemperatureUp.size()) == 0,
+               "temperature-up command matches original-display capture");
+
+        heatpump::HeatPumpCommand capturedTemperatureDown{};
+        capturedTemperatureDown.type = heatpump::HeatPumpCommandType::SetTemperature;
+        capturedTemperatureDown.targetTemperature = 26.0F;
+        const std::array<uint8_t, 12> expectedTemperatureDown =
+            {0x81U, 0xB1U, 0x26U, 0x72U, 0x76U, 0x70U,
+             0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xE0U};
+        expect(heatpump::NetConfiguration::apply(before.data(),
+                                                 capturedTemperatureDown,
+                                                 output),
+               "captured temperature-down mutation built");
+        expect(std::memcmp(output,
+                           expectedTemperatureDown.data(),
+                           expectedTemperatureDown.size()) == 0,
+               "temperature-down command matches original-display capture");
 
         heatpump::HeatPumpCommand setpoint{};
         setpoint.type = heatpump::HeatPumpCommandType::SetTemperature;
@@ -170,8 +236,8 @@ namespace
                "mode mutation built");
         expect((output[2] & 0x30U) == 0x10U, "mode bits changed to heat");
         const std::array<uint8_t, 12> expectedHeatMode =
-            {0x81U, 0xB1U, 0x16U, 0x72U, 0x76U, 0x74U,
-             0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xD4U};
+            {0x81U, 0xB1U, 0x16U, 0x72U, 0x76U, 0x72U,
+             0x3DU, 0x3DU, 0x3DU, 0x3DU, 0x3CU, 0xD2U};
         expect(std::memcmp(output, expectedHeatMode.data(), expectedHeatMode.size()) == 0,
                "mode command has expected byte sequence");
         expectPreserved(before, output, 2U, "mode preserves unrelated settings");
@@ -183,15 +249,19 @@ namespace
 
     void testCommandTransmissionProfile()
     {
-        expect(config::netbus::kTxHighZeroUs == 3000U,
-               "command zero uses decoder-compatible long HIGH pulse");
-        expect(config::netbus::kTxHighOneUs == 1000U,
-               "command one uses decoder-compatible short HIGH pulse");
-        expect(config::netbus::kTxCommandRepeatCount == 8U,
-               "command frame is repeated eight times");
-        expect(config::netbus::kTxInterFrameLowUs == 1000U &&
-               config::netbus::kTxInterFrameHighUs == 100000U,
-               "command repetitions use captured NET-bus spacing");
+        expect(!config::netbus::kRxLongHighMeansOne,
+               "pump RX keeps captured short-HIGH-is-one mapping");
+        expect(config::netbus::kTxLongHighMeansOne,
+               "display TX uses captured long-HIGH-is-one mapping");
+        expect(config::netbus::kTxHighZeroUs == 1000U,
+               "display command zero uses short HIGH pulse");
+        expect(config::netbus::kTxHighOneUs == 3000U,
+               "display command one uses long HIGH pulse");
+        expect(config::netbus::kTxTrailingLowUs == 1000U &&
+               config::netbus::kTxReplyDelayUs == 100000U,
+               "response uses captured trailing LOW and turnaround time");
+        expect(config::control::kCommandConfirmationTimeoutMs >= 11000U,
+               "confirmation timeout covers captured write-to-readback latency");
     }
 
     void testArbitrationAndProtectionTimes()

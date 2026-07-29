@@ -483,6 +483,20 @@ namespace communication
                 return;
             }
 
+            logger::Logger::log(logger::Type::Comms,
+                                "ESP-NOW command RX frameBytes=%d payloadBytes=%u wireSequence=%lu metadataSequence=%lu commandId=%lu messageType=%u command=%u power=%u setpointCenti=%d mode=%u validityMs=%lu",
+                                len,
+                                static_cast<unsigned>(frame.header.payloadLength),
+                                static_cast<unsigned long>(frame.header.sequenceNumber),
+                                static_cast<unsigned long>(payload.metadata.sequenceNumber),
+                                static_cast<unsigned long>(frame.header.commandId),
+                                static_cast<unsigned>(frame.header.messageType),
+                                static_cast<unsigned>(payload.command),
+                                static_cast<unsigned>(payload.power),
+                                static_cast<int>(payload.setpointCentiDegrees),
+                                static_cast<unsigned>(payload.mode),
+                                static_cast<unsigned long>(payload.metadata.validityMs));
+
             const poolwire::DecodeStatus sequenceStatus =
                 receivedSequences_.accept(frame.header.source, frame.header.sequenceNumber);
 
