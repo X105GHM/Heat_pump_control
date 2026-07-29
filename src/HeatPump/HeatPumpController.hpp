@@ -30,8 +30,11 @@ namespace heatpump
         {
             HeatPumpCommand command{};
             uint8_t expectedFrame[NetConfiguration::kFrameSize]{};
-            uint32_t transmittedAtMs = 0U;
+            uint32_t firstTransmittedAtMs = 0U;
+            uint32_t lastTransmittedAtMs = 0U;
+            uint32_t nextRetryAtMs = 0U;
             uint32_t lastObservedConfigFrameMs = 0U;
+            uint16_t transmitAttemptCount = 0U;
             PendingPhase phase = PendingPhase::AwaitingTransmit;
             bool active = false;
             bool safetyStop = false;
@@ -53,6 +56,8 @@ namespace heatpump
                         uint16_t errorCode);
         void rejectQueuedCommandsForSafety();
         bool netStateIsCurrent(const HeatPumpData& snapshot, uint32_t now) const;
+        bool pendingPowerCommandIsRetryable() const;
+        void queuePendingPowerRetry(uint32_t now);
         led::Fault evaluateFault(const HeatPumpData& snap, uint8_t& detailCode);
         static const char* faultToString(led::Fault fault);
 

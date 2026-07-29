@@ -262,6 +262,9 @@ namespace
                "response uses captured trailing LOW and turnaround time");
         expect(config::control::kCommandConfirmationTimeoutMs >= 11000U,
                "confirmation timeout covers captured write-to-readback latency");
+        expect(config::control::kPowerCommandRetryIntervalMs >=
+                   config::control::kMinNetCommandIntervalMs,
+               "power retries respect the NET-bus command interval");
     }
 
     void testArbitrationAndProtectionTimes()

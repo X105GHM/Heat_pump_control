@@ -82,6 +82,7 @@ namespace config
         static constexpr uint32_t kMinRunTimeMs = 180000;
         static constexpr uint32_t kMinOffTimeMs = 180000;
         static constexpr uint32_t kMinNetCommandIntervalMs = 1000;
+        static constexpr uint32_t kPowerCommandRetryIntervalMs = 1000;
         static constexpr uint32_t kCommandConfirmationTimeoutMs = 12000;
         static constexpr float kCompressorCurrentThresholdA = 0.7F;
         static constexpr uint32_t kStartupGraceMs = 15000;
@@ -94,6 +95,7 @@ namespace config
         static_assert(kMinRunTimeMs > 0U);
         static_assert(kMinOffTimeMs > 0U);
         static_assert(kMinNetCommandIntervalMs > 0U);
+        static_assert(kPowerCommandRetryIntervalMs >= kMinNetCommandIntervalMs);
     }
 
     namespace errorLed

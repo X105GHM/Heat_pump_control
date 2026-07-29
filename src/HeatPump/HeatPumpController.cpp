@@ -214,9 +214,10 @@ namespace heatpump
                             ackStageToString(stage),
                             ackResultToString(result),
                             static_cast<unsigned>(errorCode),
-                            pending_.transmittedAtMs == 0U
+                            pending_.firstTransmittedAtMs == 0U
                                 ? 0UL
-                                : static_cast<unsigned long>(millis() - pending_.transmittedAtMs));
+                                : static_cast<unsigned long>(millis() -
+                                                             pending_.firstTransmittedAtMs));
         sendResult(pending_.command, stage, result, errorCode);
 
         if (pending_.safetyStop && stage == poolwire::CommandAckStage::AppliedLocally)
@@ -224,6 +225,61 @@ namespace heatpump
             safetyStopRequested_ = false;
         }
         pending_ = PendingCommand{};
+    }
+
+    bool HeatPumpController::pendingPowerCommandIsRetryable() const
+    {
+        return pending_.active &&
+               (pending_.command.type == HeatPumpCommandType::Power ||
+                pending_.command.type == HeatPumpCommandType::SafetyStop);
+    }
+
+    void HeatPumpController::queuePendingPowerRetry(const uint32_t now)
+    {
+        if (!pendingPowerCommandIsRetryable() ||
+            pending_.phase != PendingPhase::AwaitingTelemetry ||
+            static_cast<int32_t>(now - pending_.nextRetryAtMs) < 0)
+        {
+            return;
+        }
+
+        NetTxRequest request{};
+        std::memcpy(request.bytes,
+                    pending_.expectedFrame,
+                    NetConfiguration::kFrameSize);
+        request.byteCount = static_cast<uint8_t>(NetConfiguration::kFrameSize);
+        request.commandId = pending_.command.commandId;
+        request.commandType = pending_.command.type;
+        request.localExpiresAtMs = pending_.safetyStop
+            ? UINT32_MAX
+            : pending_.command.localExpiresAtMs;
+        request.reportResult = true;
+
+        if (netTxQueue_ != nullptr &&
+            xQueueSend(netTxQueue_, &request, 0U) == pdTRUE)
+        {
+            pending_.phase = PendingPhase::AwaitingTransmit;
+            logger::Logger::log(logger::Type::Control,
+                                "power command retry queued id=%lu attempt=%u desired=%s elapsed_ms=%lu",
+                                static_cast<unsigned long>(pending_.command.commandId),
+                                static_cast<unsigned>(pending_.transmitAttemptCount + 1U),
+                                pending_.command.type == HeatPumpCommandType::Power &&
+                                    pending_.command.powerOn
+                                        ? "on"
+                                        : "off",
+                                pending_.firstTransmittedAtMs == 0U
+                                    ? 0UL
+                                    : static_cast<unsigned long>(now -
+                                                                 pending_.firstTransmittedAtMs));
+            return;
+        }
+
+        pending_.nextRetryAtMs = now +
+            config::control::kPowerCommandRetryIntervalMs;
+        logger::Logger::log(logger::Type::Control,
+                            "power command retry queue busy id=%lu next_ms=%lu",
+                            static_cast<unsigned long>(pending_.command.commandId),
+                            static_cast<unsigned long>(pending_.nextRetryAtMs));
     }
 
     bool HeatPumpController::submitConfigCommand(const HeatPumpCommand& command,
@@ -353,7 +409,27 @@ namespace heatpump
             if (result.status == NetTxStatus::Sent)
             {
                 pending_.phase = PendingPhase::AwaitingTelemetry;
-                pending_.transmittedAtMs = result.completedAtMs;
+                if (pending_.firstTransmittedAtMs == 0U)
+                {
+                    pending_.firstTransmittedAtMs = result.completedAtMs;
+                }
+                pending_.lastTransmittedAtMs = result.completedAtMs;
+                pending_.nextRetryAtMs = result.completedAtMs +
+                    config::control::kPowerCommandRetryIntervalMs;
+                ++pending_.transmitAttemptCount;
+
+                if (pendingPowerCommandIsRetryable())
+                {
+                    logger::Logger::log(logger::Type::Control,
+                                        "power command attempt sent id=%lu attempt=%u desired=%s next_retry_ms=%lu",
+                                        static_cast<unsigned long>(pending_.command.commandId),
+                                        static_cast<unsigned>(pending_.transmitAttemptCount),
+                                        pending_.command.type == HeatPumpCommandType::Power &&
+                                            pending_.command.powerOn
+                                                ? "on"
+                                                : "off",
+                                        static_cast<unsigned long>(pending_.nextRetryAtMs));
+                }
             }
             else if (result.status == NetTxStatus::Expired)
             {
@@ -363,9 +439,22 @@ namespace heatpump
             }
             else
             {
-                completePending(poolwire::CommandAckStage::Failed,
-                                poolwire::AckResult::ApplicationFailed,
-                                7U);
+                if (pendingPowerCommandIsRetryable())
+                {
+                    pending_.phase = PendingPhase::AwaitingTelemetry;
+                    pending_.nextRetryAtMs = millis() +
+                        config::control::kPowerCommandRetryIntervalMs;
+                    logger::Logger::log(logger::Type::Control,
+                                        "power command TX failed; retry retained id=%lu next_ms=%lu",
+                                        static_cast<unsigned long>(pending_.command.commandId),
+                                        static_cast<unsigned long>(pending_.nextRetryAtMs));
+                }
+                else
+                {
+                    completePending(poolwire::CommandAckStage::Failed,
+                                    poolwire::AckResult::ApplicationFailed,
+                                    7U);
+                }
             }
         }
     }
@@ -384,11 +473,15 @@ namespace heatpump
             return;
         }
 
-        if (pending_.phase != PendingPhase::AwaitingTelemetry) return;
+        if (pending_.firstTransmittedAtMs == 0U)
+        {
+            queuePendingPowerRetry(now);
+            return;
+        }
 
         const bool freshConfiguration =
             snapshot.configurationValid &&
-            snapshot.lastConfigFrameMs >= pending_.transmittedAtMs;
+            snapshot.lastConfigFrameMs >= pending_.firstTransmittedAtMs;
         const bool matches = freshConfiguration &&
             NetConfiguration::matches(snapshot.configFrame, pending_.command);
 
@@ -410,7 +503,7 @@ namespace heatpump
                                 "NET readback id=%lu response_ms=%lu checksum=%s status=%s expected=%s actual=%s",
                                 static_cast<unsigned long>(pending_.command.commandId),
                                 static_cast<unsigned long>(snapshot.lastConfigFrameMs -
-                                                           pending_.transmittedAtMs),
+                                                           pending_.firstTransmittedAtMs),
                                 NetConfiguration::isValid(snapshot.configFrame,
                                                           NetConfiguration::kFrameSize)
                                     ? "OK"
@@ -428,7 +521,7 @@ namespace heatpump
             return;
         }
 
-        if (static_cast<uint32_t>(now - pending_.transmittedAtMs) >=
+        if (static_cast<uint32_t>(now - pending_.firstTransmittedAtMs) >=
             config::control::kCommandConfirmationTimeoutMs)
         {
             completePending(poolwire::CommandAckStage::Failed,
@@ -503,6 +596,8 @@ namespace heatpump
             processSafetyRequest(snapshot);
             return;
         }
+
+        queuePendingPowerRetry(now);
 
         if (static_cast<int32_t>(command.localExpiresAtMs - now) <= 0)
         {
