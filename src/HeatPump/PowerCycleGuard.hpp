@@ -10,7 +10,6 @@ namespace heatpump
         PowerCycleGuard(uint32_t minimumRunTimeMs, uint32_t minimumOffTimeMs);
         void observe(bool powerOn, uint32_t nowMs);
         bool allows(bool requestedPowerOn, uint32_t nowMs) const;
-        bool known() const;
 
     private:
         uint32_t minimumRunTimeMs_;

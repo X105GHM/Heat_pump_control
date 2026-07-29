@@ -21,8 +21,7 @@ namespace heatpump
     bool NetBusArbiter::beginTransmit(const uint32_t nowMs)
     {
         if (state_ != State::Idle) return false;
-        if (hasTransmitted_ &&
-            static_cast<uint32_t>(nowMs - lastTransmitMs_) < minimumCommandIntervalMs_)
+        if (hasTransmitted_ && static_cast<uint32_t>(nowMs - lastTransmitMs_) < minimumCommandIntervalMs_)
         {
             return false;
         }
@@ -38,8 +37,4 @@ namespace heatpump
         state_ = State::Idle;
     }
 
-    NetBusArbiter::State NetBusArbiter::state() const
-    {
-        return state_;
-    }
 }

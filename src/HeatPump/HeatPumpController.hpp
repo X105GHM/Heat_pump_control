@@ -31,9 +31,10 @@ namespace heatpump
             HeatPumpCommand command{};
             uint8_t expectedFrame[NetConfiguration::kFrameSize]{};
             uint32_t firstTransmittedAtMs = 0U;
-            uint32_t lastTransmittedAtMs = 0U;
             uint32_t nextRetryAtMs = 0U;
+            #if HEAT_PUMP_ENABLE_COMMAND_DEBUG
             uint32_t lastObservedConfigFrameMs = 0U;
+            #endif
             uint16_t transmitAttemptCount = 0U;
             PendingPhase phase = PendingPhase::AwaitingTransmit;
             bool active = false;
@@ -44,16 +45,9 @@ namespace heatpump
         void processNetTxResults();
         void processPendingConfirmation(const HeatPumpData& snapshot);
         void processNextCommand(const HeatPumpData& snapshot);
-        bool submitConfigCommand(const HeatPumpCommand& command,
-                                 const HeatPumpData& snapshot,
-                                 bool safetyStop);
-        void completePending(poolwire::CommandAckStage stage,
-                             poolwire::AckResult result,
-                             uint16_t errorCode);
-        void sendResult(const HeatPumpCommand& command,
-                        poolwire::CommandAckStage stage,
-                        poolwire::AckResult result,
-                        uint16_t errorCode);
+        bool submitConfigCommand(const HeatPumpCommand& command, const HeatPumpData& snapshot, bool safetyStop);
+        void completePending(poolwire::CommandAckStage stage, poolwire::AckResult result, uint16_t errorCode);
+        void sendResult(const HeatPumpCommand& command, poolwire::CommandAckStage stage, poolwire::AckResult result, uint16_t errorCode);
         void rejectQueuedCommandsForSafety();
         bool netStateIsCurrent(const HeatPumpData& snapshot, uint32_t now) const;
         bool pendingPowerCommandIsRetryable() const;

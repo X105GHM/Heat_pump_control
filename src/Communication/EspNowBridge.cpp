@@ -15,6 +15,24 @@ namespace communication
             0xFF, 0xFF, 0xFF,
             0xFF, 0xFF, 0xFF
         };
+
+        static_assert(WF_SAMPLES == poolwire::kWaveformSamples);
+        static_assert(static_cast<uint8_t>(heatpump::HeatPumpMode::Heat) ==
+                      static_cast<uint8_t>(poolwire::HeatPumpMode::Heat));
+        static_assert(static_cast<uint8_t>(heatpump::HeatPumpMode::Cool) ==
+                      static_cast<uint8_t>(poolwire::HeatPumpMode::Cool));
+        static_assert(static_cast<uint8_t>(heatpump::HeatPumpMode::Auto) ==
+                      static_cast<uint8_t>(poolwire::HeatPumpMode::Auto));
+        static_assert(static_cast<uint8_t>(heatpump::HeatPumpMode::Unknown) ==
+                      static_cast<uint8_t>(poolwire::HeatPumpMode::Unknown));
+        static_assert(static_cast<uint8_t>(heatpump::HeatPumpCommandType::Power) ==
+                      static_cast<uint8_t>(poolwire::HeatPumpCommandKind::Power));
+        static_assert(static_cast<uint8_t>(heatpump::HeatPumpCommandType::SetTemperature) ==
+                      static_cast<uint8_t>(poolwire::HeatPumpCommandKind::Setpoint));
+        static_assert(static_cast<uint8_t>(heatpump::HeatPumpCommandType::SetMode) ==
+                      static_cast<uint8_t>(poolwire::HeatPumpCommandKind::Mode));
+        static_assert(static_cast<uint8_t>(heatpump::HeatPumpCommandType::RequestStatus) ==
+                      static_cast<uint8_t>(poolwire::HeatPumpCommandKind::RequestStatus));
     }
 
     EspNowBridge* EspNowBridge::instance_ = nullptr;
@@ -41,29 +59,33 @@ namespace communication
         return envelope;
     }
 
-    void EspNowBridge::begin()
+    bool EspNowBridge::begin()
     {
         bridgeWatchdog_.start(millis());
         if (!initRadio())
         {
             logger::Logger::log(
+                logger::Level::Error,
                 logger::Type::Comms,
                 "ESP-NOW init failed");
 
-            return;
+            return false;
         }
 
-        addBroadcastPeer();
+        if (!addBroadcastPeer())
+        {
+            return false;
+        }
 
         poolwire::Discovery discovery{};
         poolwire::EncodedFrame discoveryFrame{};
 
-        if (poolwire::encodeMessage(
-                nextEnvelope(poolwire::NodeId::Broadcast),
-                discovery,
-                discoveryFrame))
+        if (poolwire::encodeMessage(nextEnvelope(poolwire::NodeId::Broadcast), discovery, discoveryFrame))
         {
-            esp_now_send(kBroadcastMac, discoveryFrame.data(), discoveryFrame.size);
+            if (esp_now_send(kBroadcastMac, discoveryFrame.data(), discoveryFrame.size) != ESP_OK)
+            {
+                sendFailures_.fetch_add(1U);
+            }
         }
 
         uint8_t myMac[6]{};
@@ -73,10 +95,12 @@ namespace communication
         macToString(myMac, macText);
 
         logger::Logger::log(
+            logger::Level::Info,
             logger::Type::Comms,
             "ESP-NOW ready mac=%s channel=%u",
             macText,
             static_cast<unsigned>(config::espnow::kWifiChannel));
+        return true;
     }
 
     bool EspNowBridge::initRadio()
@@ -90,20 +114,43 @@ namespace communication
 
         if (result != ESP_OK)
         {
-            logger::Logger::log(logger::Type::Comms, "esp_wifi_set_channel failed err=%d", static_cast<int>(result));
+            logger::Logger::log(logger::Level::Error,
+                                logger::Type::Comms,
+                                "esp_wifi_set_channel failed err=%d",
+                                static_cast<int>(result));
+            return false;
         }
 
         result = esp_now_init();
 
         if (result != ESP_OK && result != ESP_ERR_ESPNOW_EXIST)
         {
-            logger::Logger::log(logger::Type::Comms, "esp_now_init failed err=%d", static_cast<int>(result));
+            logger::Logger::log(logger::Level::Error,
+                                logger::Type::Comms,
+                                "esp_now_init failed err=%d",
+                                static_cast<int>(result));
             return false;
         }
 
-        esp_now_register_recv_cb(&EspNowBridge::onRecvThunk);
+        result = esp_now_register_recv_cb(&EspNowBridge::onRecvThunk);
+        if (result != ESP_OK)
+        {
+            logger::Logger::log(logger::Level::Error,
+                                logger::Type::Comms,
+                                "esp_now_register_recv_cb failed err=%d",
+                                static_cast<int>(result));
+            return false;
+        }
 
-        esp_now_register_send_cb(&EspNowBridge::onSentThunk);
+        result = esp_now_register_send_cb(&EspNowBridge::onSentThunk);
+        if (result != ESP_OK)
+        {
+            logger::Logger::log(logger::Level::Error,
+                                logger::Type::Comms,
+                                "esp_now_register_send_cb failed err=%d",
+                                static_cast<int>(result));
+            return false;
+        }
 
         return true;
     }
@@ -134,10 +181,7 @@ namespace communication
             return true;
         }
 
-        char macText[18]{};
-        macToString(mac, macText);
-
-        logger::Logger::log(logger::Type::Comms, "esp_now_add_peer failed mac=%s err=%d", macText, static_cast<int>(result));
+        sendFailures_.fetch_add(1U);
 
         return false;
     }
@@ -152,19 +196,15 @@ namespace communication
         bool changed = false;
         portENTER_CRITICAL(&stateMux_);
         changed = !peerValid_ || std::memcmp(peerMac_, mac, 6) != 0;
+        portEXIT_CRITICAL(&stateMux_);
+
+        if (!changed || !addPeer(mac)) return;
+
+        portENTER_CRITICAL(&stateMux_);
         std::memcpy(peerMac_, mac, 6);
         peerValid_ = true;
         portEXIT_CRITICAL(&stateMux_);
-
-        addPeer(mac);
-
-        if (changed)
-        {
-            char macText[18]{};
-            macToString(mac, macText);
-
-            logger::Logger::log(logger::Type::Comms, "ESP-NOW peer set to %s", macText);
-        }
+        peerChangePending_.store(true);
     }
 
     void EspNowBridge::loopOnce()
@@ -195,13 +235,17 @@ namespace communication
 
         const uint32_t now = millis();
         const uint32_t lastRx = lastRxMs_.load();
-        const heatpump::BridgeWatchdog::Transition bridgeTransition =
-            bridgeWatchdog_.update(now, lastRx);
+        const heatpump::BridgeWatchdog::Transition bridgeTransition = bridgeWatchdog_.update(now, lastRx);
         if (bridgeTransition.requestSafetyStop)
         {
             requestSafetyStop();
         }
-        const bool bridgeOnline = bridgeWatchdog_.online();
+        if (bridgeTransition.reconnected)
+        {
+            logger::Logger::log(logger::Level::Info,
+                                logger::Type::Comms,
+                                "ESP-NOW bridge connected");
+        }
 
         if ((now - lastStatusSendMs_) >= config::espnow::kStatusSendPeriodMs)
         {
@@ -209,32 +253,48 @@ namespace communication
             sendStatus();
         }
 
-        if ((now - lastStatusLogMs_) >= 5000)
+        if (peerChangePending_.exchange(false))
         {
-            lastStatusLogMs_ = now;
+            uint8_t peer[6]{};
+            if (snapshotPeer(peer))
+            {
+                char macText[18]{};
+                macToString(peer, macText);
+                logger::Logger::log(logger::Level::Info,
+                                    logger::Type::Comms,
+                                    "ESP-NOW peer set to %s",
+                                    macText);
+            }
+        }
 
-            const heatpump::HeatPumpData snapshot =
-                state_.snapshot();
+        if (static_cast<uint32_t>(now - lastFailureLogMs_) >= 5000U)
+        {
+            lastFailureLogMs_ = now;
+            const uint32_t sendFailures = sendFailures_.exchange(0U);
+            const uint32_t decodeFailures = receiveDecodeFailures_.exchange(0U);
+            const uint32_t queueFailures = commandQueueFailures_.exchange(0U);
 
-            logger::Logger::log(
-                logger::Type::Comms,
-                "status: water=%.1f target=%.1f current=%.2fA "
-                "power=%u valid=%u comp=%u err=%u code=%u clip=%u "
-                "peer=%u lastRxAge=%lu lastTxAge=%lu sendErr=%d sendCb=%u",
-                snapshot.waterTemperature,
-                snapshot.targetTemperature,
-                snapshot.currentRMS,
-                snapshot.powerOn ? 1U : 0U,
-                snapshot.powerStateValid ? 1U : 0U,
-                snapshot.compressorRunning ? 1U : 0U,
-                snapshot.errorActive ? 1U : 0U,
-                static_cast<unsigned>(snapshot.errorCode),
-                snapshot.currentClipping ? 1U : 0U,
-                bridgeOnline ? 1U : 0U,
-                static_cast<unsigned long>(lastRx == 0U ? 0U : now - lastRx),
-                static_cast<unsigned long>(lastTxMs_ == 0 ? 0 : now - lastTxMs_),
-                static_cast<int>(lastSendResult_),
-                static_cast<unsigned>(lastSendStatus_));
+            if (sendFailures != 0U)
+            {
+                logger::Logger::log(logger::Level::Warn,
+                                    logger::Type::Comms,
+                                    "ESP-NOW send failures since last report=%lu",
+                                    static_cast<unsigned long>(sendFailures));
+            }
+            if (decodeFailures != 0U)
+            {
+                logger::Logger::log(logger::Level::Warn,
+                                    logger::Type::Comms,
+                                    "ESP-NOW decode failures since last report=%lu",
+                                    static_cast<unsigned long>(decodeFailures));
+            }
+            if (queueFailures != 0U)
+            {
+                logger::Logger::log(logger::Level::Error,
+                                    logger::Type::Comms,
+                                    "command queue overflows since last report=%lu",
+                                    static_cast<unsigned long>(queueFailures));
+            }
         }
     }
 
@@ -287,25 +347,19 @@ namespace communication
         }
 
         const uint8_t* target = peerValid ? peer : kBroadcastMac;
-        const poolwire::NodeId destination = peerValid
-            ? poolwire::NodeId::EspNowBridge
-            : poolwire::NodeId::Broadcast;
+        const poolwire::NodeId destination = peerValid ? poolwire::NodeId::EspNowBridge : poolwire::NodeId::Broadcast;
         const poolwire::HeatPumpTelemetry payload = makeStatusPayload();
         poolwire::EncodedFrame frame{};
 
         if (!poolwire::encodeMessage(nextEnvelope(destination), payload, frame))
         {
-            lastSendResult_ = ESP_ERR_INVALID_ARG;
+            sendFailures_.fetch_add(1U);
             return;
         }
 
-        lastSendResult_ = esp_now_send(target, frame.data(), frame.size);
-
-        lastTxMs_ = millis();
-
-        if (lastSendResult_ != ESP_OK)
+        if (esp_now_send(target, frame.data(), frame.size) != ESP_OK)
         {
-            logger::Logger::log(logger::Type::Comms, "ESP-NOW status send failed err=%d", static_cast<int>(lastSendResult_));
+            sendFailures_.fetch_add(1U);
         }
     }
 
@@ -316,7 +370,7 @@ namespace communication
             return false;
         }
 
-        return xQueueSend(commandQueue_, &command, pdMS_TO_TICKS(20)) == pdTRUE;
+        return xQueueSend(commandQueue_, &command, 0U) == pdTRUE;
     }
 
     void EspNowBridge::onRecvThunk(const esp_now_recv_info_t* info, const uint8_t* data, const int len)
@@ -349,8 +403,11 @@ namespace communication
 
         if (xQueueSendToFront(commandQueue_, &command, 0U) == pdTRUE)
         {
-            logger::Logger::log(logger::Type::Comms,
-                                "bridge timeout: safety stop queued");
+            logger::Logger::log(logger::Level::Warn, logger::Type::Comms, "bridge timeout: safety stop queued");
+        }
+        else
+        {
+            commandQueueFailures_.fetch_add(1U);
         }
     }
 
@@ -368,11 +425,9 @@ namespace communication
     {
         (void)mac;
 
-        lastSendStatus_ = status;
-
         if (status != ESP_NOW_SEND_SUCCESS)
         {
-            logger::Logger::log(logger::Type::Comms, "ESP-NOW send callback: FAIL");
+            sendFailures_.fetch_add(1U);
         }
     }
 
@@ -389,8 +444,10 @@ namespace communication
 
         poolwire::FrameView frame{};
 
-        if (poolwire::decodeFrame(data, static_cast<size_t>(len), options, frame) != poolwire::DecodeStatus::Ok)
+        const poolwire::DecodeStatus decodeStatus = poolwire::decodeFrame(data, static_cast<size_t>(len), options, frame);
+        if (decodeStatus != poolwire::DecodeStatus::Ok)
         {
+            receiveDecodeFailures_.fetch_add(1U);
             return;
         }
 
@@ -483,7 +540,9 @@ namespace communication
                 return;
             }
 
-            logger::Logger::log(logger::Type::Comms,
+            #if HEAT_PUMP_ENABLE_ESPNOW_DEBUG
+            logger::Logger::log(logger::Level::Debug,
+                                logger::Type::Comms,
                                 "ESP-NOW command RX frameBytes=%d payloadBytes=%u wireSequence=%lu metadataSequence=%lu commandId=%lu messageType=%u command=%u power=%u setpointCenti=%d mode=%u validityMs=%lu",
                                 len,
                                 static_cast<unsigned>(frame.header.payloadLength),
@@ -496,12 +555,11 @@ namespace communication
                                 static_cast<int>(payload.setpointCentiDegrees),
                                 static_cast<unsigned>(payload.mode),
                                 static_cast<unsigned long>(payload.metadata.validityMs));
+            #endif
 
-            const poolwire::DecodeStatus sequenceStatus =
-                receivedSequences_.accept(frame.header.source, frame.header.sequenceNumber);
+            const poolwire::DecodeStatus sequenceStatus = receivedSequences_.accept(frame.header.source, frame.header.sequenceNumber);
 
-            if (sequenceStatus != poolwire::DecodeStatus::Ok &&
-                sequenceStatus != poolwire::DecodeStatus::Duplicate)
+            if (sequenceStatus != poolwire::DecodeStatus::Ok && sequenceStatus != poolwire::DecodeStatus::Duplicate)
             {
                 return;
             }
@@ -513,8 +571,7 @@ namespace communication
                 poolwire::CommandLedgerEntry entry{};
                 bool found = false;
                 portENTER_CRITICAL(&commandLedgerMux_);
-                if (const poolwire::CommandLedgerEntry* stored =
-                        commandLedger_.find(actor, frame.header.commandId))
+                if (const poolwire::CommandLedgerEntry* stored = commandLedger_.find(actor, frame.header.commandId))
                 {
                     entry = *stored;
                     found = true;
@@ -523,10 +580,7 @@ namespace communication
 
                 if (found)
                 {
-                    sendCommandAck(mac,
-                                   frame.header.commandId,
-                                   entry.stage,
-                                   entry.result);
+                    sendCommandAck(mac, frame.header.commandId, entry.stage, entry.result);
                 }
                 return;
             }
@@ -534,12 +588,8 @@ namespace communication
             poolwire::CommandObservation observation{};
             poolwire::CommandLedgerEntry ledgerEntry{};
             portENTER_CRITICAL(&commandLedgerMux_);
-            observation = commandLedger_.observe(actor,
-                                                 frame.header.commandId,
-                                                 payload.metadata,
-                                                 millis());
-            if (const poolwire::CommandLedgerEntry* stored =
-                    commandLedger_.find(actor, frame.header.commandId))
+            observation = commandLedger_.observe(actor, frame.header.commandId, payload.metadata, millis());
+            if (const poolwire::CommandLedgerEntry* stored = commandLedger_.find(actor, frame.header.commandId))
             {
                 ledgerEntry = *stored;
             }
@@ -547,10 +597,7 @@ namespace communication
 
             if (observation == poolwire::CommandObservation::Duplicate)
             {
-                sendCommandAck(mac,
-                               frame.header.commandId,
-                               ledgerEntry.stage,
-                               ledgerEntry.result);
+                sendCommandAck(mac, frame.header.commandId, ledgerEntry.stage, ledgerEntry.result);
                 return;
             }
 
@@ -559,11 +606,7 @@ namespace communication
                 const poolwire::AckResult result = observation == poolwire::CommandObservation::Superseded
                     ? poolwire::AckResult::Superseded
                     : poolwire::AckResult::Expired;
-                sendCommandAck(mac,
-                               frame.header.commandId,
-                               poolwire::CommandAckStage::Rejected,
-                               result,
-                               2U);
+                sendCommandAck(mac, frame.header.commandId, poolwire::CommandAckStage::Rejected, result, 2U);
                 return;
             }
 
@@ -572,16 +615,9 @@ namespace communication
             if (!convertCommandPayload(payload, command))
             {
                 portENTER_CRITICAL(&commandLedgerMux_);
-                commandLedger_.update(actor,
-                                      frame.header.commandId,
-                                      poolwire::CommandAckStage::Rejected,
-                                      poolwire::AckResult::InvalidPayload);
+                commandLedger_.update(actor, frame.header.commandId, poolwire::CommandAckStage::Rejected, poolwire::AckResult::InvalidPayload);
                 portEXIT_CRITICAL(&commandLedgerMux_);
-                sendCommandAck(mac,
-                               frame.header.commandId,
-                               poolwire::CommandAckStage::Rejected,
-                               poolwire::AckResult::InvalidPayload,
-                               3U);
+                sendCommandAck(mac, frame.header.commandId, poolwire::CommandAckStage::Rejected, poolwire::AckResult::InvalidPayload, 3U);
                 return;
             }
 
@@ -591,32 +627,25 @@ namespace communication
 
             lastRxMs_.store(millis());
             rememberPeer(mac);
-            sendCommandAck(mac,
-                           frame.header.commandId,
-                           poolwire::CommandAckStage::ReceivedByNode,
-                           poolwire::AckResult::Accepted);
+            sendCommandAck(mac, frame.header.commandId, poolwire::CommandAckStage::ReceivedByNode, poolwire::AckResult::Accepted);
             const bool queued = injectCommand(command);
 
             if (!queued)
             {
+                commandQueueFailures_.fetch_add(1U);
                 portENTER_CRITICAL(&commandLedgerMux_);
-                commandLedger_.update(actor,
-                                      frame.header.commandId,
-                                      poolwire::CommandAckStage::Rejected,
-                                      poolwire::AckResult::QueueFull);
+                commandLedger_.update(actor, frame.header.commandId, poolwire::CommandAckStage::Rejected, poolwire::AckResult::QueueFull);
                 portEXIT_CRITICAL(&commandLedgerMux_);
-                sendCommandAck(mac,
-                               frame.header.commandId,
-                               poolwire::CommandAckStage::Rejected,
-                               poolwire::AckResult::QueueFull,
-                               4U);
+                sendCommandAck(mac, frame.header.commandId, poolwire::CommandAckStage::Rejected, poolwire::AckResult::QueueFull, 4U);
             }
 
-            logger::Logger::log(
-                logger::Type::Comms,
-                "ESP-NOW heatpump command received type=%u queued=%u",
-                static_cast<unsigned>(payload.command),
-                queued ? 1U : 0U);
+            #if HEAT_PUMP_ENABLE_ESPNOW_DEBUG
+            logger::Logger::log(logger::Level::Debug,
+                                logger::Type::Comms,
+                                "ESP-NOW heatpump command received type=%u queued=%u",
+                                static_cast<unsigned>(payload.command),
+                                queued ? 1U : 0U);
+            #endif
             return;
         }
     }
@@ -637,10 +666,7 @@ namespace communication
 
         poolwire::EncodedFrame frame{};
 
-        if (!poolwire::encodeMessage(
-                nextEnvelope(poolwire::NodeId::EspNowBridge),
-                pairing,
-                frame))
+        if (!poolwire::encodeMessage(nextEnvelope(poolwire::NodeId::EspNowBridge), pairing, frame))
         {
             return;
         }
@@ -649,7 +675,7 @@ namespace communication
 
         if (result != ESP_OK)
         {
-            logger::Logger::log(logger::Type::Comms, "pairing send failed err=%d", static_cast<int>(result));
+            sendFailures_.fetch_add(1U);
         }
     }
 
@@ -672,17 +698,20 @@ namespace communication
 
         poolwire::EncodedFrame frame{};
 
-        if (poolwire::encodeMessage(
-                nextEnvelope(poolwire::NodeId::EspNowBridge, commandId),
-                ack,
-                frame))
+        if (poolwire::encodeMessage(nextEnvelope(poolwire::NodeId::EspNowBridge, commandId), ack, frame))
         {
-            esp_now_send(mac, frame.data(), frame.size);
+            if (esp_now_send(mac, frame.data(), frame.size) != ESP_OK)
+            {
+                sendFailures_.fetch_add(1U);
+            }
+        }
+        else
+        {
+            sendFailures_.fetch_add(1U);
         }
     }
 
-    bool EspNowBridge::convertCommandPayload(const poolwire::HeatPumpCommand& payload,
-                                             heatpump::HeatPumpCommand& outCommand)
+    bool EspNowBridge::convertCommandPayload(const poolwire::HeatPumpCommand& payload, heatpump::HeatPumpCommand& outCommand)
     {
         using ControllerCommandType = heatpump::HeatPumpCommandType;
 

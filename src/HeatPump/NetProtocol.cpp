@@ -1,8 +1,9 @@
 #include "HeatPump/NetProtocol.hpp"
 #include "Logger/Logger.hpp"
 
-#include <cmath>
+#if HEAT_PUMP_ENABLE_NET_DEBUG
 #include <cstdio>
+#endif
 #include <cstring>
 
 namespace
@@ -31,6 +32,7 @@ namespace
         return static_cast<uint8_t>(sum & 0xFFU) == bytes[8];
     }
 
+    #if HEAT_PUMP_ENABLE_NET_DEBUG
     void bytesToHex(const uint8_t* bytes, const uint8_t count, char* out, const size_t outSize)
     {
         size_t pos = 0;
@@ -40,6 +42,7 @@ namespace
             pos += snprintf(out + pos, outSize - pos, "%02X ", bytes[i]);
         }
     }
+    #endif
 
     float decodeTemperature(const uint8_t raw)
     {
@@ -132,17 +135,7 @@ namespace heatpump
         return false;
     }
 
-    const char* NetProtocol::modeToString(const HeatPumpMode mode)
-    {
-        switch (mode)
-        {
-            case HeatPumpMode::Heat: return "Heat";
-            case HeatPumpMode::Cool: return "Cool";
-            case HeatPumpMode::Auto: return "Auto";
-            default: return "Unknown";
-        }
-    }
-
+    #if HEAT_PUMP_ENABLE_NET_DEBUG
     void NetProtocol::logRawFrame(const NetRawFrame& frame) const
     {
         char hex[3 * config::netbus::kMaxBytesPerFrame + 1]{};
@@ -171,7 +164,8 @@ namespace heatpump
             receivedChecksum = frame.bytes[8];
         }
 
-        logger::Logger::log(logger::Type::Protocol,
+        logger::Logger::log(logger::Level::Debug,
+                            logger::Type::Protocol,
                             "NET RX t_ms=%lu end_us=%lu bits=%u bytes=%u overflow=%u checksum=%s calculated=0x%02X received=0x%02X frame=%s",
                             static_cast<unsigned long>(frame.timestampMs),
                             static_cast<unsigned long>(frame.completedAtUs),
@@ -183,19 +177,20 @@ namespace heatpump
                             receivedChecksum,
                             hex);
     }
+    #endif
 
     bool NetProtocol::decode(const NetRawFrame& frame, HeatPumpData& outData) const
     {
         outData = HeatPumpData{};
-        outData.waterTemperature = NAN;
-        outData.targetTemperature = NAN;
-        outData.mode = HeatPumpMode::Unknown;
 
+        #if HEAT_PUMP_ENABLE_NET_DEBUG
         logRawFrame(frame);
+        #endif
 
         if (!checksumLooksValid(frame))
         {
-            logger::Logger::log(logger::Type::Protocol,
+            logger::Logger::log(logger::Level::Warn,
+                                logger::Type::Protocol,
                                 "frame rejected: checksum/length invalid bits=%u bytes=%u",
                                 static_cast<unsigned>(frame.bitCount),
                                 static_cast<unsigned>(frame.byteCount));
@@ -204,10 +199,13 @@ namespace heatpump
 
         if (frame.byteCount == config::netbus::kShortFrameBytes)
         {
-            logger::Logger::log(logger::Type::Protocol,
+        #if HEAT_PUMP_ENABLE_NET_DEBUG
+            logger::Logger::log(logger::Level::Debug,
+                                logger::Type::Protocol,
                                 "short frame ok but ignored: type=0x%02X subtype=0x%02X",
                                 frame.bytes[0],
                                 frame.bytes[1]);
+        #endif
             return true;
         }
 
@@ -215,7 +213,8 @@ namespace heatpump
 
         if (bytes[1] != 0xB1U)
         {
-            logger::Logger::log(logger::Type::Protocol,
+            logger::Logger::log(logger::Level::Warn,
+                                logger::Type::Protocol,
                                 "frame ignored: unexpected subtype 0x%02X",
                                 bytes[1]);
             return false;
@@ -230,27 +229,33 @@ namespace heatpump
                 outData.waterTemperature = waterTemperature;
                 outData.validFields |= WaterTemperatureField;
 
-                logger::Logger::log(logger::Type::Protocol,
+                #if HEAT_PUMP_ENABLE_NET_DEBUG
+                logger::Logger::log(logger::Level::Debug,
+                                    logger::Type::Protocol,
                                     "D1 conditions1: water/t02=%.1fC raw=0x%02X",
                                     waterTemperature,
                                     bytes[9]);
+                #endif
 
                 return true;
             }
 
             case 0xD2:
             {
+                #if HEAT_PUMP_ENABLE_NET_DEBUG
                 const float t03 = decodeTemperature(bytes[4]);
                 const float exhaust = decodeTemperature(bytes[5]);
                 const float coil = decodeTemperature(bytes[6]);
                 const float temp4 = decodeTemperature(bytes[8]);
 
-                logger::Logger::log(logger::Type::Protocol,
+                logger::Logger::log(logger::Level::Debug,
+                                    logger::Type::Protocol,
                                     "D2 conditions2: t03=%.1fC exhaust=%.1fC coil=%.1fC temp4=%.1fC",
                                     t03,
                                     exhaust,
                                     coil,
                                     temp4);
+                #endif
 
                 return true;
             }
@@ -262,9 +267,6 @@ namespace heatpump
                 const bool powerOn = (modeByte & 0x01U) != 0;
                 const HeatPumpMode mode = decodeMode(modeByte);
 
-                const float coolingTarget = decodeTemperature(bytes[3]);
-                const float heatingTarget = decodeTemperature(bytes[4]);
-                const float autoTarget = decodeTemperature(bytes[5]);
                 const float selectedTarget = selectTargetTemperature(bytes, mode);
 
                 outData.powerOn = powerOn;
@@ -280,52 +282,50 @@ namespace heatpump
                             config::netbus::kLongFrameBytes);
                 outData.configurationValid = true;
 
-                logger::Logger::log(logger::Type::Protocol,
-                                    "81 conf1: power=%u mode=%s modeByte=0x%02X cool=%.1fC heat=%.1fC auto=%.1fC selected=%.1fC",
+                #if HEAT_PUMP_ENABLE_NET_DEBUG
+                logger::Logger::log(logger::Level::Debug,
+                                    logger::Type::Protocol,
+                                    "81 conf1: power=%u mode=%u modeByte=0x%02X selected=%.1fC",
                                     powerOn ? 1 : 0,
-                                    modeToString(mode),
+                                    static_cast<unsigned>(mode),
                                     modeByte,
-                                    coolingTarget,
-                                    heatingTarget,
-                                    autoTarget,
                                     selectedTarget);
+                #endif
 
                 return true;
             }
 
             case 0x82:
             {
-              //  logger::Logger::log(logger::Type::Protocol, "82 config/status frame ok, currently not decoded");
                 return true;
             }
 
             case 0x83:
             {
-               //  logger::Logger::log(logger::Type::Protocol, "83 config/status frame ok, currently not decoded");
                 return true;
             }
 
             case 0x84:
             {
-                // logger::Logger::log(logger::Type::Protocol, "84 config/status frame ok, currently not decoded");
                 return true;
             }
 
             case 0x85:
             {
-               //  logger::Logger::log(logger::Type::Protocol, "85 config/status frame ok, currently not decoded");
                 return true;
             }
 
             case 0x86:
             {
-              //   logger::Logger::log(logger::Type::Protocol, "86 config/status frame ok, currently not decoded");
                 return true;
             }
 
             default:
             {
-                logger::Logger::log(logger::Type::Protocol,"known checksum but unknown frame type 0x%02X", bytes[0]);
+                logger::Logger::log(logger::Level::Warn,
+                                    logger::Type::Protocol,
+                                    "known checksum but unknown frame type 0x%02X",
+                                    bytes[0]);
                 return false;
             }
         }

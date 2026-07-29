@@ -14,7 +14,6 @@ namespace heatpump
         void endReceive();
         bool beginTransmit(uint32_t nowMs);
         void endTransmit(uint32_t nowMs);
-        State state() const;
 
     private:
         uint32_t minimumCommandIntervalMs_;

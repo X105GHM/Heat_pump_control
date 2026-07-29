@@ -1,6 +1,7 @@
 #include "HeatPump/NetBus.hpp"
 #include "Logger/Logger.hpp"
 
+#if HEAT_PUMP_ENABLE_NET_DEBUG
 #include <cstdio>
 
 namespace
@@ -11,24 +12,23 @@ namespace
                     const size_t outputSize)
     {
         size_t position = 0U;
-        for (size_t index = 0U;
-             index < byteCount && position + 3U < outputSize;
-             ++index)
+        for (size_t index = 0U; index < byteCount && position + 3U < outputSize; ++index)
         {
-            position += std::snprintf(output + position,
-                                      outputSize - position,
-                                      "%02X ",
-                                      bytes[index]);
+            position += std::snprintf(output + position, outputSize - position, "%02X ", bytes[index]);
         }
     }
 }
+#endif
 
 namespace heatpump
 {
     void NetBus::begin()
     {
         releaseBus();
-        logger::Logger::log(logger::Type::NetBus, "NET bus initialized on GPIO%u as high-Z input", static_cast<unsigned>(pin_));
+        logger::Logger::log(logger::Level::Info,
+                            logger::Type::NetBus,
+                            "NET bus initialized on GPIO%u as high-Z input",
+                            static_cast<unsigned>(pin_));
     }
 
     void NetBus::releaseBus() const
@@ -162,7 +162,10 @@ namespace heatpump
 
             if (!inRange(bitLowUs, config::netbus::kBitLowMinUs, config::netbus::kBitLowMaxUs)) 
             {
-                logger::Logger::log(logger::Type::NetBus, "bit LOW out of range: %lu us", static_cast<unsigned long>(bitLowUs));
+                logger::Logger::log(logger::Level::Warn,
+                                    logger::Type::NetBus,
+                                    "bit LOW out of range: %lu us",
+                                    static_cast<unsigned long>(bitLowUs));
                 break;
             }
 
@@ -176,7 +179,10 @@ namespace heatpump
             const NetBit bit = highDurationToBit(bitHighUs);
             if (bit == NetBit::Unknown) 
             {
-                logger::Logger::log(logger::Type::NetBus, "unknown HIGH pulse: %lu us", static_cast<unsigned long>(bitHighUs));
+                logger::Logger::log(logger::Level::Warn,
+                                    logger::Type::NetBus,
+                                    "unknown HIGH pulse: %lu us",
+                                    static_cast<unsigned long>(bitHighUs));
                 break;
             }
 
@@ -197,7 +203,9 @@ namespace heatpump
 
         if (!waitForIdleHigh(config::netbus::kFrameGapUs, 100000))
         {
-            logger::Logger::log(logger::Type::NetBus, "TX aborted: bus not idle");
+            logger::Logger::log(logger::Level::Error,
+                                logger::Type::NetBus,
+                                "TX aborted: bus not idle");
             return false;
         }
 
@@ -232,7 +240,10 @@ namespace heatpump
 
         if (byteCount != config::netbus::kShortFrameBytes && byteCount != config::netbus::kLongFrameBytes) 
         {
-            logger::Logger::log(logger::Type::NetBus, "TX rejected: expected 9 or 12 bytes, got %u", static_cast<unsigned>(byteCount));
+            logger::Logger::log(logger::Level::Error,
+                                logger::Type::NetBus,
+                                "TX rejected: expected 9 or 12 bytes, got %u",
+                                static_cast<unsigned>(byteCount));
             return false;
         }
 
@@ -249,10 +260,12 @@ namespace heatpump
             }
         }
 
+        #if HEAT_PUMP_ENABLE_NET_DEBUG
         char hex[3U * config::netbus::kMaxBytesPerFrame + 1U]{};
         bytesToHex(bytes, byteCount, hex, sizeof(hex));
         const uint32_t startedAtUs = micros();
-        logger::Logger::log(logger::Type::NetBus,
+        logger::Logger::log(logger::Level::Debug,
+                            logger::Type::NetBus,
                             "NET TX start t_us=%lu bytes=%u bits=%u rxLongIsOne=%u txLongIsOne=%u zeroHigh=%luus oneHigh=%luus frame=%s",
                             static_cast<unsigned long>(startedAtUs),
                             static_cast<unsigned>(byteCount),
@@ -262,14 +275,18 @@ namespace heatpump
                             static_cast<unsigned long>(config::netbus::kTxHighZeroUs),
                             static_cast<unsigned long>(config::netbus::kTxHighOneUs),
                             hex);
+        #endif
 
         const bool sent = sendBitsSafe(bits, bitCount);
+        #if HEAT_PUMP_ENABLE_NET_DEBUG
         const uint32_t completedAtUs = micros();
-        logger::Logger::log(logger::Type::NetBus,
+        logger::Logger::log(logger::Level::Debug,
+                            logger::Type::NetBus,
                             "NET TX complete t_us=%lu duration_us=%lu result=%s",
                             static_cast<unsigned long>(completedAtUs),
                             static_cast<unsigned long>(completedAtUs - startedAtUs),
                             sent ? "sent" : "failed");
+        #endif
         return sent;
     }
 

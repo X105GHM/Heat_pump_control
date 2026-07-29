@@ -49,9 +49,7 @@ namespace heatpump
         return HeatPumpMode::Cool;
     }
 
-    bool NetConfiguration::apply(const uint8_t* current,
-                                 const HeatPumpCommand& command,
-                                 uint8_t* output)
+    bool NetConfiguration::apply(const uint8_t* current, const HeatPumpCommand& command, uint8_t* output)
     {
         if (!isValid(current, kFrameSize) || output == nullptr)
         {
@@ -71,7 +69,10 @@ namespace heatpump
                 break;
 
             case HeatPumpCommandType::SetMode:
-                if (command.mode == HeatPumpMode::Unknown) return false;
+                if (command.mode != HeatPumpMode::Heat && command.mode != HeatPumpMode::Cool && command.mode != HeatPumpMode::Auto)
+                {
+                    return false;
+                }
                 output[2] &= static_cast<uint8_t>(~0x30U);
                 if (command.mode == HeatPumpMode::Heat) output[2] |= 0x10U;
                 if (command.mode == HeatPumpMode::Auto) output[2] |= 0x20U;

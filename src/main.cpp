@@ -3,8 +3,6 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 
-#include <cstring>
-
 #include "Config/Pins.hpp"
 #include "Config/AppConfig.hpp"
 #include "Logger/Logger.hpp"
@@ -32,54 +30,12 @@ namespace
     led::StatusLed gRxLed(config::pins::kRxLed);
     led::StatusLed gTxLed(config::pins::kTxLed);
 
-    int hexNibbleToInt(const char c)
+    [[noreturn]] void restartAfterInitializationFailure(const char* reason)
     {
-        if (c >= '0' && c <= '9')
-            return c - '0';
-        if (c >= 'A' && c <= 'F')
-            return 10 + c - 'A';
-        if (c >= 'a' && c <= 'f')
-            return 10 + c - 'a';
-        return -1;
-    }
-
-    bool parseHexFrame(const String &text, uint8_t *outBytes, size_t &outCount, const size_t maxBytes)
-    {
-        outCount = 0;
-        int highNibble = -1;
-
-        for (size_t i = 0; i < text.length(); ++i)
-        {
-            const char c = text[i];
-
-            if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ':' || c == '-')
-            {
-                continue;
-            }
-
-            const int nibble = hexNibbleToInt(c);
-            if (nibble < 0)
-            {
-                return false;
-            }
-
-            if (highNibble < 0)
-            {
-                highNibble = nibble;
-            }
-            else
-            {
-                if (outCount >= maxBytes)
-                {
-                    return false;
-                }
-
-                outBytes[outCount++] = static_cast<uint8_t>((highNibble << 4) | nibble);
-                highNibble = -1;
-            }
-        }
-
-        return highNibble < 0 && outCount > 0;
+        logger::Logger::log(logger::Level::Error, logger::Type::General, "%s; restarting", reason);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP.restart();
+        for (;;) vTaskDelay(portMAX_DELAY);
     }
 
     void netBusOwnerTask(void *)
@@ -107,15 +63,12 @@ namespace
                 txLedOffAtMs = 0U;
             }
 
-            if (!hasPendingTx &&
-                xQueueReceive(gNetTxQueue, &pendingTx, 0U) == pdTRUE)
+            if (!hasPendingTx && xQueueReceive(gNetTxQueue, &pendingTx, 0U) == pdTRUE)
             {
                 hasPendingTx = true;
             }
 
-            if (hasPendingTx &&
-                pendingTx.localExpiresAtMs != UINT32_MAX &&
-                static_cast<int32_t>(pendingTx.localExpiresAtMs - now) <= 0)
+            if (hasPendingTx && pendingTx.localExpiresAtMs != UINT32_MAX && static_cast<int32_t>(pendingTx.localExpiresAtMs - now) <= 0)
             {
                 if (pendingTx.reportResult)
                 {
@@ -124,7 +77,10 @@ namespace
                     result.commandType = pendingTx.commandType;
                     result.completedAtMs = now;
                     result.status = heatpump::NetTxStatus::Expired;
-                    xQueueSend(gNetTxResultQueue, &result, 0U);
+                    if (xQueueSend(gNetTxResultQueue, &result, 0U) != pdTRUE)
+                    {
+                        logger::Logger::log(logger::Level::Error, logger::Type::Control, "NET TX result queue full id=%lu", static_cast<unsigned long>(result.commandId));
+                    }
                 }
                 hasPendingTx = false;
             }
@@ -141,8 +97,7 @@ namespace
 
                     if (xQueueSend(gRawFrameQueue, &frame, 0U) != pdTRUE)
                     {
-                        logger::Logger::log(logger::Type::NetBus,
-                                            "raw frame queue full; frame dropped");
+                        logger::Logger::log(logger::Level::Warn, logger::Type::NetBus, "raw frame queue full; frame dropped");
                     }
 
                     const bool replyTrigger =
@@ -153,22 +108,22 @@ namespace
 
                     if (hasPendingTx && replyTrigger)
                     {
-                        const uint32_t replyAtUs =
-                            frame.completedAtUs + config::netbus::kTxReplyDelayUs;
-                        const uint32_t sendCallAtUs =
-                            replyAtUs - config::netbus::kFrameGapUs;
-                        logger::Logger::log(logger::Type::NetBus,
+                        const uint32_t replyAtUs = frame.completedAtUs + config::netbus::kTxReplyDelayUs;
+                        const uint32_t sendCallAtUs = replyAtUs - config::netbus::kFrameGapUs;
+                        #if HEAT_PUMP_ENABLE_NET_DEBUG
+                        logger::Logger::log(logger::Level::Debug,
+                                            logger::Type::NetBus,
                                             "NET TX scheduled commandId=%lu trigger=0x%02X/0x%02X frameEndUs=%lu replyAtUs=%lu",
                                             static_cast<unsigned long>(pendingTx.commandId),
                                             frame.bytes[0],
                                             frame.bytes[1],
                                             static_cast<unsigned long>(frame.completedAtUs),
                                             static_cast<unsigned long>(replyAtUs));
+                        #endif
 
                         for (;;)
                         {
-                            const int32_t remainingUs =
-                                static_cast<int32_t>(sendCallAtUs - micros());
+                            const int32_t remainingUs = static_cast<int32_t>(sendCallAtUs - micros());
                             if (remainingUs <= 0) break;
                             if (remainingUs > 1500)
                             {
@@ -181,9 +136,7 @@ namespace
                         }
 
                         const uint32_t txNow = millis();
-                        const bool expired =
-                            pendingTx.localExpiresAtMs != UINT32_MAX &&
-                            static_cast<int32_t>(pendingTx.localExpiresAtMs - txNow) <= 0;
+                        const bool expired = pendingTx.localExpiresAtMs != UINT32_MAX && static_cast<int32_t>(pendingTx.localExpiresAtMs - txNow) <= 0;
 
                         if (expired)
                         {
@@ -194,14 +147,18 @@ namespace
                                 result.commandType = pendingTx.commandType;
                                 result.completedAtMs = txNow;
                                 result.status = heatpump::NetTxStatus::Expired;
-                                xQueueSend(gNetTxResultQueue, &result, 0U);
+                                if (xQueueSend(gNetTxResultQueue, &result, 0U) != pdTRUE)
+                                {
+                                    logger::Logger::log(logger::Level::Error, logger::Type::Control,
+                                                        "NET TX result queue full id=%lu",
+                                                        static_cast<unsigned long>(result.commandId));
+                                }
                             }
                             hasPendingTx = false;
                         }
                         else if (arbiter.beginTransmit(txNow))
                         {
-                            const bool sent = gNetBus.sendBytesSafe(pendingTx.bytes,
-                                                                    pendingTx.byteCount);
+                            const bool sent = gNetBus.sendBytesSafe(pendingTx.bytes, pendingTx.byteCount);
                             const uint32_t completedAtMs = millis();
                             arbiter.endTransmit(completedAtMs);
                             gTxLed.set(true);
@@ -213,10 +170,14 @@ namespace
                                 result.commandId = pendingTx.commandId;
                                 result.commandType = pendingTx.commandType;
                                 result.completedAtMs = completedAtMs;
-                                result.status = sent
-                                    ? heatpump::NetTxStatus::Sent
-                                    : heatpump::NetTxStatus::Failed;
-                                xQueueSend(gNetTxResultQueue, &result, 0U);
+                                result.status = sent ? heatpump::NetTxStatus::Sent : heatpump::NetTxStatus::Failed;
+                                if (xQueueSend(gNetTxResultQueue, &result, 0U) != pdTRUE)
+                                {
+                                    logger::Logger::log(logger::Level::Error,
+                                                        logger::Type::Control,
+                                                        "NET TX result queue full id=%lu",
+                                                        static_cast<unsigned long>(result.commandId));
+                                }
                             }
                             hasPendingTx = false;
                         }
@@ -264,13 +225,6 @@ namespace
                                      measurement.clipping,
                                      compressorRunning);
 
-           /* logger::Logger::log(logger::Type::Current,
-                                "Irms=%.2fA VrmsAC=%.3fV mean=%.3fV clipping=%u",
-                                measurement.currentRms,
-                                measurement.voltageRmsAc,
-                                measurement.adcMeanVoltage,
-                                measurement.clipping ? 1 : 0); */
-
             vTaskDelay(pdMS_TO_TICKS(config::current::kMeasurementPeriodMs));
         }
     }
@@ -294,7 +248,10 @@ namespace
     void communicationTask(void *)
     {
         communication::EspNowBridge bridge(gState, gCommandQueue, gCommandResultQueue);
-        bridge.begin();
+        if (!bridge.begin())
+        {
+            restartAfterInitializationFailure("ESP-NOW initialization failed");
+        }
 
         for (;;)
         {
@@ -303,118 +260,16 @@ namespace
         }
     }
 
-    void serialCommandTask(void *)
-    {
-        logger::Logger::log(logger::Type::General, "Serial commands ready: help, nettx HEXFRAME");
-
-        String line;
-        line.reserve(128);
-
-        for (;;)
-        {
-            while (Serial.available() > 0)
-            {
-                const char c = static_cast<char>(Serial.read());
-
-                if (c == '\r' || c == '\n')
-                {
-                    line.trim();
-
-                    if (line.length() == 0)
-                    {
-                        continue;
-                    }
-
-                    if (line == "help")
-                    {
-                        logger::Logger::log(
-                            logger::Type::General,
-                            "commands: RX, TX, reset, heap, nettx HEXFRAME");
-                    }
-                    else if (line == "reset")
-                    {
-                        logger::Logger::log(
-                            logger::Type::General,
-                            "reset requested");
-
-                        delay(1000);
-                        ESP.restart();
-                    }
-                    else if (line == "RX")
-                    {
-                        logger::Logger::log(
-                            logger::Type::General,
-                            "RX LED pulse");
-
-                        gRxLed.pulse(100);
-                    }
-                    else if (line == "TX")
-                    {
-                        logger::Logger::log(
-                            logger::Type::General,
-                            "TX LED pulse");
-
-                        gTxLed.pulse(100);
-                    }
-                    else if (line == "heap")
-                    {
-                        logger::Logger::log(
-                            logger::Type::General,
-                            "heap: free=%u minFree=%u maxAlloc=%u",
-                            static_cast<unsigned>(ESP.getFreeHeap()),
-                            static_cast<unsigned>(ESP.getMinFreeHeap()),
-                            static_cast<unsigned>(ESP.getMaxAllocHeap()));
-                    }
-                    else if (line.startsWith("nettx "))
-                    {
-                        const String hex = line.substring(6);
-
-                        uint8_t bytes[config::netbus::kMaxBytesPerFrame]{};
-                        size_t byteCount = 0;
-
-                        if (!parseHexFrame(hex, bytes, byteCount, sizeof(bytes)))
-                        {
-                            logger::Logger::log(logger::Type::General, "invalid hex frame");
-                        }
-                        else
-                        {
-                            logger::Logger::log(logger::Type::General, "manual NET TX requested, bytes=%u", static_cast<unsigned>(byteCount));
-
-                            heatpump::NetTxRequest request{};
-                            std::memcpy(request.bytes, bytes, byteCount);
-                            request.byteCount = static_cast<uint8_t>(byteCount);
-                            request.localExpiresAtMs = millis() + 5000U;
-                            request.reportResult = false;
-
-                            if (xQueueSend(gNetTxQueue, &request, 0U) != pdTRUE)
-                            {
-                                logger::Logger::log(logger::Type::General,
-                                                    "manual NET TX queue full");
-                            }
-                        }
-                    }
-                    else
-                    {
-                        logger::Logger::log(logger::Type::General, "unknown command: %s", line.c_str());
-                    }
-
-                    line = "";
-                }
-                else if (line.length() < 120)
-                {
-                    line += c;
-                }
-            }
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
-    }
 }
 
 void setup()
 {
     logger::Logger::begin(config::kSerialBaud);
 
-    gState.begin();
+    if (!gState.begin())
+    {
+        restartAfterInitializationFailure("state mutex allocation failed");
+    }
     gCurrentSensor.begin();
     gRxLed.begin();
     gTxLed.begin();
@@ -431,19 +286,22 @@ void setup()
         gNetTxQueue == nullptr ||
         gNetTxResultQueue == nullptr)
     {
-        logger::Logger::log(logger::Type::General, "queue allocation failed; restarting");
-        delay(1000);
-        ESP.restart();
+        restartAfterInitializationFailure("queue allocation failed");
     }
 
-    xTaskCreatePinnedToCore(netBusOwnerTask, "NetBusOwner", 4096, nullptr, 2, nullptr, 0);
-    xTaskCreatePinnedToCore(netProtocolTask, "NetProtocol", 4096, nullptr, 1, nullptr, 0);
-    xTaskCreatePinnedToCore(currentSensorTask, "Current", 4096, nullptr, 1, nullptr, 1);
-    xTaskCreatePinnedToCore(heatPumpControlTask, "HPControl", 4096, nullptr, 1, nullptr, 1);
-    xTaskCreatePinnedToCore(communicationTask, "Comms", 4096, nullptr, 1, nullptr, 1);
-    xTaskCreatePinnedToCore(serialCommandTask, "SerialCmd", 4096, nullptr, 1, nullptr, 1);
+    const bool tasksCreated =
+        xTaskCreatePinnedToCore(netBusOwnerTask, "NetBusOwner", 4096, nullptr, 2, nullptr, 0) == pdPASS &&
+        xTaskCreatePinnedToCore(netProtocolTask, "NetProtocol", 4096, nullptr, 1, nullptr, 0) == pdPASS &&
+        xTaskCreatePinnedToCore(currentSensorTask, "Current", 4096, nullptr, 1, nullptr, 1) == pdPASS &&
+        xTaskCreatePinnedToCore(heatPumpControlTask, "HPControl", 4096, nullptr, 1, nullptr, 1) == pdPASS &&
+        xTaskCreatePinnedToCore(communicationTask, "Comms", 4096, nullptr, 1, nullptr, 1) == pdPASS;
 
-    logger::Logger::log(logger::Type::General, "setup complete; sniffing active; manual NET TX via nettx only");
+    if (!tasksCreated)
+    {
+        restartAfterInitializationFailure("task creation failed");
+    }
+
+    logger::Logger::log(logger::Level::Info, logger::Type::General, "setup complete; NET-bus and ESP-NOW tasks active");
 }
 
 void loop()

@@ -2,6 +2,18 @@
 #include <cstdint>
 #include <cstddef>
 
+#ifndef HEAT_PUMP_ENABLE_NET_DEBUG
+#define HEAT_PUMP_ENABLE_NET_DEBUG 0
+#endif
+
+#ifndef HEAT_PUMP_ENABLE_COMMAND_DEBUG
+#define HEAT_PUMP_ENABLE_COMMAND_DEBUG 0
+#endif
+
+#ifndef HEAT_PUMP_ENABLE_ESPNOW_DEBUG
+#define HEAT_PUMP_ENABLE_ESPNOW_DEBUG 0
+#endif
+
 namespace config
 {
     static constexpr uint32_t kSerialBaud = 115200;

@@ -1,8 +1,5 @@
 #pragma once
 #include <Arduino.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
-#include "Core/Types.hpp"
 #include "Config/AppConfig.hpp"
 #include "HeatPump/HeatPumpCommand.hpp"
 #include "HeatPump/NetFrame.hpp"
@@ -47,20 +44,15 @@ namespace heatpump
         explicit NetBus(uint8_t pin) : pin_(pin) {}
 
         void begin();
-        bool readLevel() const;
-
-        void releaseBus() const;
-        void pullLow() const;
-
-        bool sendBitsSafe(const bool* bits, size_t bitCount) const;
-
         bool sendBytesSafe(const uint8_t* bytes, size_t byteCount) const;
-
         bool sniffFrame(NetRawFrame& outFrame);
 
-        bool waitForIdleHigh(uint32_t idleUs, uint32_t timeoutUs) const;
-
     private:
+        bool readLevel() const;
+        void releaseBus() const;
+        void pullLow() const;
+        bool sendBitsSafe(const bool* bits, size_t bitCount) const;
+        bool waitForIdleHigh(uint32_t idleUs, uint32_t timeoutUs) const;
         static bool inRange(uint32_t value, uint32_t min, uint32_t max) noexcept;
         static NetBit highDurationToBit(uint32_t highUs) noexcept;
         static void appendBit(NetRawFrame& frame, bool bit) noexcept;

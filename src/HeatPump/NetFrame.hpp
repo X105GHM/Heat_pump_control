@@ -14,6 +14,5 @@ namespace heatpump
         uint8_t bytes[config::netbus::kMaxBytesPerFrame]{};
         uint8_t byteCount = 0U;
         bool overflow = false;
-        bool checksumOk = false;
     };
 }

@@ -17,7 +17,10 @@ namespace current
 
         (void)analogRead(adcPin_);
 
-        logger::Logger::log(logger::Type::Current, "Current ADC initialized on GPIO%u", static_cast<unsigned>(adcPin_));
+        logger::Logger::log(logger::Level::Info,
+                            logger::Type::Current,
+                            "Current ADC initialized on GPIO%u",
+                            static_cast<unsigned>(adcPin_));
     }
 
     float CurrentSensor::rawToVoltage(const uint16_t raw) const
@@ -68,9 +71,8 @@ namespace current
         }
 
         CurrentMeasurement result{};
-        result.adcMeanVoltage = meanVoltage;
-        result.voltageRmsAc = sqrtf(squareSum / static_cast<float>(config::current::kSampleCount));
-        result.currentRms = result.voltageRmsAc * config::current::kAmpsPerVoltRms;
+        const float voltageRmsAc = sqrtf(squareSum / static_cast<float>(config::current::kSampleCount));
+        result.currentRms = voltageRmsAc * config::current::kAmpsPerVoltRms;
 
         if (result.currentRms < config::current::kNoiseFloorA) 
         {
@@ -79,11 +81,11 @@ namespace current
 
         result.clipping = clipping;
 
-        // Downsample to waveform buffer, preserving voltage AC component in volts.
         for (size_t i = 0; i < WF_SAMPLES; ++i) 
         {
             const size_t src = (i * config::current::kSampleCount) / WF_SAMPLES;
-            result.waveform[i] = rawToVoltage(raw[src]) - meanVoltage;
+            const float voltageAc = rawToVoltage(raw[src]) - meanVoltage;
+            result.waveform[i] = voltageAc * config::current::kAmpsPerVoltRms;
         }
 
         return result;

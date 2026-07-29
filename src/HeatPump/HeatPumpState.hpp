@@ -2,8 +2,6 @@
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include <cstring>
-#include <cmath>
 #include "HeatPump/HeatPumpData.hpp"
 
 namespace heatpump
@@ -13,9 +11,10 @@ namespace heatpump
     public:
         HeatPumpState() = default;
 
-        void begin()
+        bool begin()
         {
             mutex_ = xSemaphoreCreateMutex();
+            return mutex_ != nullptr;
         }
 
         void updateFromCurrent(const float currentRms,

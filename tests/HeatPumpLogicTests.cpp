@@ -242,6 +242,12 @@ namespace
                "mode command has expected byte sequence");
         expectPreserved(before, output, 2U, "mode preserves unrelated settings");
 
+        heatpump::HeatPumpCommand invalidMode{};
+        invalidMode.type = heatpump::HeatPumpCommandType::SetMode;
+        invalidMode.mode = static_cast<heatpump::HeatPumpMode>(3U);
+        expect(!heatpump::NetConfiguration::apply(before.data(), invalidMode, output),
+               "unsupported mode value rejected instead of becoming cool mode");
+
         uint8_t unknown[12]{};
         expect(!heatpump::NetConfiguration::apply(unknown, power, output),
                "normal command rejected without valid source configuration");
@@ -287,6 +293,22 @@ namespace
         guard.observe(true, 180000U);
         expect(!guard.allows(false, 359999U), "minimum run-time enforced");
         expect(guard.allows(false, 360000U), "stop allowed after run-time");
+
+        heatpump::NetBusArbiter wrappingArbiter(1000U);
+        expect(wrappingArbiter.beginTransmit(UINT32_MAX - 499U),
+               "NET transmit starts before millis wrap");
+        wrappingArbiter.endTransmit(UINT32_MAX - 499U);
+        expect(!wrappingArbiter.beginTransmit(499U),
+               "NET interval remains enforced across millis wrap");
+        expect(wrappingArbiter.beginTransmit(500U),
+               "NET interval expires correctly across millis wrap");
+
+        heatpump::PowerCycleGuard wrappingGuard(1000U, 1000U);
+        wrappingGuard.observe(false, UINT32_MAX - 499U);
+        expect(!wrappingGuard.allows(true, 499U),
+               "power guard remains active across millis wrap");
+        expect(wrappingGuard.allows(true, 500U),
+               "power guard expires correctly across millis wrap");
     }
 
     void testNetOutageAndReconnect()

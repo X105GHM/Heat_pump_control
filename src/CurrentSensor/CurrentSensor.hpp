@@ -7,8 +7,6 @@ namespace current
     struct CurrentMeasurement
     {
         float currentRms = 0.0F;
-        float voltageRmsAc = 0.0F;
-        float adcMeanVoltage = 0.0F;
         bool clipping = false;
         float waveform[WF_SAMPLES]{};
         size_t waveformCount = WF_SAMPLES;

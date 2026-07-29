@@ -13,7 +13,7 @@
 
 #include <PoolWireProtocol.hpp>
 #include "HeatPump/HeatPumpState.hpp"
-#include "HeatPump/HeatPumpController.hpp"
+#include "HeatPump/HeatPumpCommand.hpp"
 #include "HeatPump/BridgeWatchdog.hpp"
 
 namespace communication
@@ -25,13 +25,13 @@ namespace communication
                      QueueHandle_t commandQueue,
                      QueueHandle_t commandResultQueue);
 
-        void begin();
+        bool begin();
 
         void loopOnce();
 
+    private:
         bool injectCommand(const heatpump::HeatPumpCommand& command);
 
-    private:
         static void onRecvThunk(const esp_now_recv_info_t* info, const uint8_t* data, int len);
 
         static void onSentThunk(const wifi_tx_info_t* info, esp_now_send_status_t status);
@@ -62,8 +62,7 @@ namespace communication
 
         [[nodiscard]] poolwire::HeatPumpTelemetry makeStatusPayload() const;
 
-        [[nodiscard]] poolwire::Envelope nextEnvelope(poolwire::NodeId destination,
-                                                      uint32_t commandId = 0U);
+        [[nodiscard]] poolwire::Envelope nextEnvelope(poolwire::NodeId destination, uint32_t commandId = 0U);
 
         static bool isBroadcastMac(const uint8_t mac[6]);
 
@@ -71,8 +70,7 @@ namespace communication
 
         static void macToString(const uint8_t mac[6], char out[18]);
 
-        static bool convertCommandPayload(const poolwire::HeatPumpCommand& payload,
-                                          heatpump::HeatPumpCommand& outCommand);
+        static bool convertCommandPayload(const poolwire::HeatPumpCommand& payload, heatpump::HeatPumpCommand& outCommand);
 
         heatpump::HeatPumpState& state_;
         QueueHandle_t commandQueue_;
@@ -84,14 +82,14 @@ namespace communication
         portMUX_TYPE commandLedgerMux_ = portMUX_INITIALIZER_UNLOCKED;
 
         uint32_t lastStatusSendMs_{0};
-        uint32_t lastStatusLogMs_{0};
+        uint32_t lastFailureLogMs_{0};
         std::atomic<uint32_t> lastRxMs_{0U};
-        uint32_t lastTxMs_{0};
         heatpump::BridgeWatchdog bridgeWatchdog_;
 
-        esp_err_t lastSendResult_{ESP_FAIL};
-
-        esp_now_send_status_t lastSendStatus_{ESP_NOW_SEND_FAIL};
+        std::atomic<uint32_t> sendFailures_{0U};
+        std::atomic<uint32_t> receiveDecodeFailures_{0U};
+        std::atomic<uint32_t> commandQueueFailures_{0U};
+        std::atomic<bool> peerChangePending_{false};
 
         std::atomic<uint32_t> nextSequence_{1U};
         poolwire::SequenceTracker receivedSequences_;

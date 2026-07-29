@@ -13,10 +13,4 @@ namespace led
         digitalWrite(pin_, on ? HIGH : LOW);
     }
 
-    void StatusLed::pulse(const uint16_t ms) const
-    {
-        digitalWrite(pin_, HIGH);
-        delay(ms);
-        digitalWrite(pin_, LOW);
-    }
 }

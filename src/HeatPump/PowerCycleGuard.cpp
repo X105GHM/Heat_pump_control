@@ -28,8 +28,4 @@ namespace heatpump
             : elapsed >= minimumRunTimeMs_;
     }
 
-    bool PowerCycleGuard::known() const
-    {
-        return known_;
-    }
 }
