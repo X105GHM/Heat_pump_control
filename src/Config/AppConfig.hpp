@@ -30,8 +30,12 @@ namespace config
 
         static constexpr uint32_t kTxLowUs = 1000;
 
-        static constexpr uint32_t kTxHighZeroUs = 1000;
-        static constexpr uint32_t kTxHighOneUs = 3000;
+        static constexpr uint32_t kTxHighShortUs = 1000;
+        static constexpr uint32_t kTxHighLongUs = 3000;
+        static constexpr uint32_t kTxHighZeroUs =
+            kLongHighMeansOne ? kTxHighShortUs : kTxHighLongUs;
+        static constexpr uint32_t kTxHighOneUs =
+            kLongHighMeansOne ? kTxHighLongUs : kTxHighShortUs;
         static constexpr uint8_t kTxCommandRepeatCount = 8U;
         static constexpr uint32_t kTxInterFrameLowUs = 1000U;
         static constexpr uint32_t kTxInterFrameHighUs = 100000U;
@@ -54,7 +58,7 @@ namespace config
         static constexpr uint32_t kBitHighOneMaxUs =
             kLongHighMeansOne ? kLongHighMaxUs : kShortHighMaxUs;
 
-        static_assert(kTxHighZeroUs < kTxHighOneUs);
+        static_assert(kTxHighZeroUs != kTxHighOneUs);
         static_assert(kTxCommandRepeatCount > 1U);
     }
 

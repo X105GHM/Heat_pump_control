@@ -183,10 +183,10 @@ namespace
 
     void testCommandTransmissionProfile()
     {
-        expect(config::netbus::kTxHighZeroUs == 1000U,
-               "command zero uses short HIGH pulse");
-        expect(config::netbus::kTxHighOneUs == 3000U,
-               "command one uses long HIGH pulse");
+        expect(config::netbus::kTxHighZeroUs == 3000U,
+               "command zero uses decoder-compatible long HIGH pulse");
+        expect(config::netbus::kTxHighOneUs == 1000U,
+               "command one uses decoder-compatible short HIGH pulse");
         expect(config::netbus::kTxCommandRepeatCount == 8U,
                "command frame is repeated eight times");
         expect(config::netbus::kTxInterFrameLowUs == 1000U &&
