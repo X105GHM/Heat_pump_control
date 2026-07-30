@@ -21,9 +21,7 @@ namespace communication
     class EspNowBridge
     {
     public:
-        EspNowBridge(heatpump::HeatPumpState& state,
-                     QueueHandle_t commandQueue,
-                     QueueHandle_t commandResultQueue);
+        EspNowBridge(heatpump::HeatPumpState& state, QueueHandle_t commandQueue, QueueHandle_t commandResultQueue);
 
         bool begin();
 
