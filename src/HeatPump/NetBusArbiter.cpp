@@ -2,9 +2,7 @@
 
 namespace heatpump
 {
-    NetBusArbiter::NetBusArbiter(const uint32_t minimumCommandIntervalMs)
-        : minimumCommandIntervalMs_(minimumCommandIntervalMs)
-    {}
+    NetBusArbiter::NetBusArbiter(const uint32_t minimumCommandIntervalMs) : minimumCommandIntervalMs_(minimumCommandIntervalMs) {}
 
     bool NetBusArbiter::beginReceive()
     {

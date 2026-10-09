@@ -50,11 +50,7 @@ namespace communication
 
         void sendPairing(const uint8_t* mac, poolwire::PairingAction action);
 
-        void sendCommandAck(const uint8_t* mac,
-                            uint32_t commandId,
-                            poolwire::CommandAckStage stage,
-                            poolwire::AckResult result,
-                            uint16_t errorCode = 0U);
+        void sendCommandAck(const uint8_t* mac, uint32_t commandId, poolwire::CommandAckStage stage, poolwire::AckResult result, uint16_t errorCode = 0U);
 
         void sendStatus();
 

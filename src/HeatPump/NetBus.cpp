@@ -25,10 +25,7 @@ namespace heatpump
     void NetBus::begin()
     {
         releaseBus();
-        logger::Logger::log(logger::Level::Info,
-                            logger::Type::NetBus,
-                            "NET bus initialized on GPIO%u as high-Z input",
-                            static_cast<unsigned>(pin_));
+        logger::Logger::log(logger::Level::Info, logger::Type::NetBus, "NET bus initialized on GPIO%u as high-Z input", static_cast<unsigned>(pin_));
     }
 
     void NetBus::releaseBus() const
@@ -162,10 +159,7 @@ namespace heatpump
 
             if (!inRange(bitLowUs, config::netbus::kBitLowMinUs, config::netbus::kBitLowMaxUs)) 
             {
-                logger::Logger::log(logger::Level::Warn,
-                                    logger::Type::NetBus,
-                                    "bit LOW out of range: %lu us",
-                                    static_cast<unsigned long>(bitLowUs));
+                logger::Logger::log(logger::Level::Warn, logger::Type::NetBus, "bit LOW out of range: %lu us", static_cast<unsigned long>(bitLowUs));
                 break;
             }
 
@@ -203,9 +197,7 @@ namespace heatpump
 
         if (!waitForIdleHigh(config::netbus::kFrameGapUs, 100000))
         {
-            logger::Logger::log(logger::Level::Error,
-                                logger::Type::NetBus,
-                                "TX aborted: bus not idle");
+            logger::Logger::log(logger::Level::Error, logger::Type::NetBus, "TX aborted: bus not idle");
             return false;
         }
 
@@ -219,9 +211,7 @@ namespace heatpump
             pullLow();
             delayMicroseconds(config::netbus::kTxLowUs);
             releaseBus();
-            delayMicroseconds(bits[bitIndex]
-                ? config::netbus::kTxHighOneUs
-                : config::netbus::kTxHighZeroUs);
+            delayMicroseconds(bits[bitIndex] ? config::netbus::kTxHighOneUs : config::netbus::kTxHighZeroUs);
         }
 
         pullLow();

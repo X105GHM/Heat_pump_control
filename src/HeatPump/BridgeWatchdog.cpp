@@ -2,9 +2,7 @@
 
 namespace heatpump
 {
-    BridgeWatchdog::BridgeWatchdog(const uint32_t timeoutMs)
-        : timeoutMs_(timeoutMs)
-    {}
+    BridgeWatchdog::BridgeWatchdog(const uint32_t timeoutMs) : timeoutMs_(timeoutMs){}
 
     void BridgeWatchdog::start(const uint32_t nowMs)
     {

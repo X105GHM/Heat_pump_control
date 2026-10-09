@@ -70,10 +70,7 @@ namespace
         size_t position = 0U;
         for (size_t index = 0U; index < frameSize && position + 3U < outputSize; ++index)
         {
-            position += std::snprintf(output + position,
-                                      outputSize - position,
-                                      "%02X ",
-                                      frame[index]);
+            position += std::snprintf(output + position, outputSize - position, "%02X ", frame[index]);
         }
     }
     #endif
@@ -198,9 +195,7 @@ namespace heatpump
                             ackResultToString(result),
                             static_cast<unsigned>(errorCode),
                             pending_.firstTransmittedAtMs == 0U
-                                ? 0UL
-                                : static_cast<unsigned long>(millis() -
-                                                             pending_.firstTransmittedAtMs));
+                                ? 0UL : static_cast<unsigned long>(millis() - pending_.firstTransmittedAtMs));
         sendResult(pending_.command, stage, result, errorCode);
 
         if (pending_.safetyStop && stage == poolwire::CommandAckStage::AppliedLocally)
@@ -245,9 +240,7 @@ namespace heatpump
                                     pending_.command.powerOn
                                         ? "on"
                                         : "off",
-                                pending_.firstTransmittedAtMs == 0U
-                                    ? 0UL
-                                    : static_cast<unsigned long>(now - pending_.firstTransmittedAtMs));
+                                pending_.firstTransmittedAtMs == 0U ? 0UL : static_cast<unsigned long>(now - pending_.firstTransmittedAtMs));
             #endif
             return;
         }
@@ -289,10 +282,7 @@ namespace heatpump
         {
             if (!safetyStop)
             {
-                sendResult(command,
-                           poolwire::CommandAckStage::Rejected,
-                           poolwire::AckResult::Rejected,
-                           2U);
+                sendResult(command, poolwire::CommandAckStage::Rejected, poolwire::AckResult::Rejected, 2U);
             }
             return false;
         }
@@ -387,9 +377,7 @@ namespace heatpump
                                         static_cast<unsigned long>(pending_.command.commandId),
                                         static_cast<unsigned>(pending_.transmitAttemptCount),
                                         pending_.command.type == HeatPumpCommandType::Power &&
-                                            pending_.command.powerOn
-                                                ? "on"
-                                                : "off",
+                                            pending_.command.powerOn ? "on" : "off",
                                         static_cast<unsigned long>(pending_.nextRetryAtMs));
                 #endif
                 }
@@ -404,8 +392,7 @@ namespace heatpump
                 {
                     pending_.phase = PendingPhase::AwaitingTelemetry;
                     pending_.nextRetryAtMs = millis() + config::control::kPowerCommandRetryIntervalMs;
-                    logger::Logger::log(logger::Level::Warn,
-                                        logger::Type::Control,
+                    logger::Logger::log(logger::Level::Warn, logger::Type::Control,
                                         "power command TX failed; retry retained id=%lu next_ms=%lu",
                                         static_cast<unsigned long>(pending_.command.commandId),
                                         static_cast<unsigned long>(pending_.nextRetryAtMs));
@@ -456,12 +443,8 @@ namespace heatpump
                                 logger::Type::Control,
                                 "NET readback id=%lu response_ms=%lu checksum=%s status=%s expected=%s actual=%s",
                                 static_cast<unsigned long>(pending_.command.commandId),
-                                static_cast<unsigned long>(snapshot.lastConfigFrameMs -
-                                                           pending_.firstTransmittedAtMs),
-                                NetConfiguration::isValid(snapshot.configFrame,
-                                                          NetConfiguration::kFrameSize)
-                                    ? "OK"
-                                    : "BAD",
+                                static_cast<unsigned long>(snapshot.lastConfigFrameMs - pending_.firstTransmittedAtMs),
+                                NetConfiguration::isValid(snapshot.configFrame, NetConfiguration::kFrameSize) ? "OK" : "BAD",
                                 matches ? "confirmed" : "mismatch",
                                 expectedHex,
                                 actualHex);

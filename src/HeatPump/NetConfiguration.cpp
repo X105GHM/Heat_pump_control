@@ -105,8 +105,7 @@ namespace heatpump
         return true;
     }
 
-    bool NetConfiguration::matches(const uint8_t* actual,
-                                   const HeatPumpCommand& command)
+    bool NetConfiguration::matches(const uint8_t* actual, const HeatPumpCommand& command)
     {
         if (!isValid(actual, kFrameSize)) return false;
 

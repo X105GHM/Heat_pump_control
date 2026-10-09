@@ -53,7 +53,5 @@ namespace heatpump
         return (data.validFields & static_cast<uint16_t>(field)) != 0U;
     }
 
-    void mergeDecodedData(HeatPumpData& current,
-                          const HeatPumpData& partial,
-                          uint32_t receivedAtMs);
+    void mergeDecodedData(HeatPumpData& current, const HeatPumpData& partial, uint32_t receivedAtMs);
 }

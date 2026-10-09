@@ -56,17 +56,10 @@ namespace config
         static constexpr size_t kMaxBitsPerFrame  = 128;
         static constexpr size_t kMaxBytesPerFrame = 16;
 
-        static constexpr uint32_t kBitHighZeroMinUs =
-            kRxLongHighMeansOne ? kShortHighMinUs : kLongHighMinUs;
-
-        static constexpr uint32_t kBitHighZeroMaxUs =
-            kRxLongHighMeansOne ? kShortHighMaxUs : kLongHighMaxUs;
-
-        static constexpr uint32_t kBitHighOneMinUs =
-            kRxLongHighMeansOne ? kLongHighMinUs : kShortHighMinUs;
-
-        static constexpr uint32_t kBitHighOneMaxUs =
-            kRxLongHighMeansOne ? kLongHighMaxUs : kShortHighMaxUs;
+        static constexpr uint32_t kBitHighZeroMinUs = kRxLongHighMeansOne ? kShortHighMinUs : kLongHighMinUs;
+        static constexpr uint32_t kBitHighZeroMaxUs = kRxLongHighMeansOne ? kShortHighMaxUs : kLongHighMaxUs;
+        static constexpr uint32_t kBitHighOneMinUs = kRxLongHighMeansOne ? kLongHighMinUs : kShortHighMinUs;
+        static constexpr uint32_t kBitHighOneMaxUs = kRxLongHighMeansOne ? kLongHighMaxUs : kShortHighMaxUs;
 
         static_assert(kTxHighZeroUs != kTxHighOneUs);
         static_assert(kTxLongHighMeansOne != kRxLongHighMeansOne);

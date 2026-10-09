@@ -322,10 +322,8 @@ namespace heatpump
 
             default:
             {
-                logger::Logger::log(logger::Level::Warn,
-                                    logger::Type::Protocol,
-                                    "known checksum but unknown frame type 0x%02X",
-                                    bytes[0]);
+                logger::Logger::log(logger::Level::Warn, logger::Type::Protocol,
+                                    "known checksum but unknown frame type 0x%02X", bytes[0]);
                 return false;
             }
         }

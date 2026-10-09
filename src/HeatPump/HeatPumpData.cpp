@@ -4,9 +4,7 @@
 
 namespace heatpump
 {
-    void mergeDecodedData(HeatPumpData& current,
-                          const HeatPumpData& partial,
-                          const uint32_t receivedAtMs)
+    void mergeDecodedData(HeatPumpData& current, const HeatPumpData& partial, const uint32_t receivedAtMs)
     {
         if (hasField(partial, WaterTemperatureField))
         {
@@ -32,9 +30,7 @@ namespace heatpump
         }
         if (hasField(partial, ConfigurationField))
         {
-            std::memcpy(current.configFrame,
-                        partial.configFrame,
-                        sizeof(current.configFrame));
+            std::memcpy(current.configFrame, partial.configFrame, sizeof(current.configFrame));
             current.configurationValid = partial.configurationValid;
             current.lastConfigFrameMs = receivedAtMs;
         }

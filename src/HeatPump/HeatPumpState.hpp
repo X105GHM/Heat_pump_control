@@ -17,11 +17,7 @@ namespace heatpump
             return mutex_ != nullptr;
         }
 
-        void updateFromCurrent(const float currentRms,
-                               const float* waveform,
-                               const size_t waveformCount,
-                               const bool clipping,
-                               const bool compressorRunning)
+        void updateFromCurrent(const float currentRms, const float* waveform, const size_t waveformCount, const bool clipping, const bool compressorRunning)
         {
             if (!lock()) return;
 
